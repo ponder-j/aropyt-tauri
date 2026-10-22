@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -9,8 +9,9 @@ import { build } from 'esbuild';
 import { unzipSync, strFromU8 } from 'fflate';
 const root=process.cwd(),flags=new Set(process.argv.slice(2));
 const run=(cmd,args,opts={})=>new Promise((resolve,reject)=>{const p=spawn(cmd,args,{stdio:'inherit',...opts});p.on('error',reject);p.on('exit',c=>c===0?resolve():reject(Error(cmd+' failed: '+c)));});
-const env={...process.env,PATH:path.join(process.env.HOME,'.cargo/bin')+path.delimiter+process.env.PATH};
-if(!flags.has('--no-build')&&!flags.has('--packaged')){await run(process.execPath,['build.mjs']);await run(path.join(process.env.HOME,'.cargo/bin/cargo'),['build','--manifest-path','src-tauri/Cargo.toml'],{env});}
+const cargoBin=path.join(process.env.CARGO_HOME||path.join(homedir(),'.cargo'),'bin');
+const env={...process.env,PATH:cargoBin+path.delimiter+process.env.PATH};
+if(!flags.has('--no-build')&&!flags.has('--packaged')&&!process.env.AROPYT_TEST_BINARY){await run(process.execPath,['build.mjs']);await run(path.join(cargoBin,process.platform==='win32'?'cargo.exe':'cargo'),['build','--manifest-path','src-tauri/Cargo.toml','--locked'],{env});}
 const work=await mkdtemp(path.join(tmpdir(),'aropyt-tauri-test-'));
 const server=net.createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port;await new Promise(resolve=>server.close(resolve));
 const token=randomBytes(32).toString('hex');
@@ -21,7 +22,7 @@ for(const file of ['reference.png','reference space.png'])await writeFile(path.j
 await writeFile(path.join(work,'sized.svg'),'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="blue"/></svg>');
 await mkdir(path.join(work,'nested'));await writeFile(path.join(work,'nested/child.md'),'Nested document');
 const executable=process.platform==='win32'?'aropyt.exe':'aropyt';
-const binary=flags.has('--packaged')?(process.platform==='darwin'?'src-tauri/target/release/bundle/macos/Aropyt.app/Contents/MacOS/aropyt':'src-tauri/target/release/'+executable):(process.env.CARGO_TARGET_DIR||'src-tauri/target')+'/debug/'+executable;
+const binary=process.env.AROPYT_TEST_BINARY||(flags.has('--packaged')?(process.platform==='darwin'?'src-tauri/target/release/bundle/macos/Aropyt.app/Contents/MacOS/aropyt':path.join(process.env.CARGO_TARGET_DIR||'src-tauri/target','release',executable)):path.join(process.env.CARGO_TARGET_DIR||'src-tauri/target','debug',executable));
 const child=spawn(path.isAbsolute(binary)?binary:path.join(root,binary),[source],{env:{...env,AROPYT_DATA_DIR:path.join(work,'profile'),AROPYT_TEST_PORT:String(port),AROPYT_TEST_TOKEN:token},stdio:['ignore','pipe','pipe']});
 let logs='';child.on('exit',(code,signal)=>{logs+='App exit: '+code+' '+signal+'\n';});child.stdout.on('data',s=>{logs+=s;});child.stderr.on('data',s=>{logs+=s;});
 let windowLabel;

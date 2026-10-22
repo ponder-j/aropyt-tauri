@@ -22,14 +22,29 @@ npm run package:linux
 
 ## 自动化
 
-GitHub Actions 在 macOS Apple Silicon 与 Linux ARM 原生环境检查类型、构建 Rust、运行真实 WebView 回归及打包。本次按要求不检查 x64；Windows 保留适配代码和打包入口，但不宣称已验证。Linux 图形检查使用 Xvfb。测试使用临时配置，Pandoc 单独安装；可选词典测试需要网络。
+GitHub Actions 在 macOS Apple Silicon 与 Linux ARM 原生环境检查类型、构建 Rust、运行真实 WebView 回归及打包。Windows x64 和 Linux x64 的发行包还需在对应环境运行以下检查。Linux 图形检查使用 Xvfb。测试使用临时配置，Pandoc 单独安装；可选词典测试需要网络。
 
 本机 Linux 复现环境：
 
 ```sh
-docker build -t aropyt-tauri-verify -f tools/linux.Dockerfile .
-docker run --rm --shm-size=1g aropyt-tauri-verify
+docker build --platform linux/amd64 -t aropyt-tauri-verify -f tools/linux.Dockerfile .
+docker run --rm --shm-size=1g -e WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 aropyt-tauri-verify
 ```
+
+Windows x64 安装 Rust MSVC 工具链、C++ Build Tools、WebView2 和可选 Pandoc 后：
+
+```powershell
+npm ci
+npm run typecheck
+node tools/test-platform.mjs
+node tools/wordcount-test.mjs
+npm run package:win -- --ci -- --locked
+npm run test:packaged
+```
+
+上例的 WebKit 沙箱开关仅用于容器内以 root 运行回归测试，不应设置在普通桌面启动环境中。Linux x64 的 DEB / AppImage 在 Docker 容器内构建。镜像设置了 `CARGO_TARGET_DIR=/cargo-target`，因此安装包位于 `/cargo-target/release/bundle/`，`test:packaged` 也会使用这个目录。没有 FUSE 的容器可以设置 `APPIMAGE_EXTRACT_AND_RUN=1` 运行 AppImage。
+
+安装后可用 `AROPYT_TEST_BINARY` 指定实际安装的可执行文件，再运行 `npm run test:packaged`，覆盖安装包资源和系统 WebView；配置和词典仍写入测试临时目录。发布前分别验证 Windows 安装程序、已安装的 DEB 和 AppImage，保留各自的 `release/verification/` 证据，并生成 SHA-256 校验文件。Release 标签必须指向实际构建的源码提交。
 
 ## 签名
 

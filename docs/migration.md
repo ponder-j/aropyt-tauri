@@ -32,10 +32,10 @@
 
 ## 验证范围
 
-按用户要求仅验证 ARM，不检查 x64。macOS Apple Silicon 的 84 项真实 WebView 检查已通过；另外通过路径/URL 回归、13 组统计参考数据及类型检查。原 Electron 检查脚本归档在 `tests/electron-reference/`，不计入新版验证。
+首次迁移验证覆盖 ARM。macOS Apple Silicon 的 84 项真实 WebView 检查已通过；另外通过路径/URL 回归、13 组统计参考数据及类型检查。原 Electron 检查脚本归档在 `tests/electron-reference/`，不计入新版验证。Windows x64 与 Linux x64 的发行验证流程见 [构建与发布](releasing.md)，具体结果随 Release 提供。
 
 覆盖实际文件、剪贴板、草稿、取消保存、词典下载与校验、离线检查、建议和学习、CLD2 检测、九种 Pandoc 格式、原生 PDF / PNG、多窗口及标签页。长文档 PDF 已核对分页、A4 页面和尾部文本，导出保持可选择文本与矢量公式/图表。
 
 macOS APP / DMG 使用本机 ARM 原生构建。默认 APP 约 20 MiB、DMG 约 15 MiB；本机旧版 Electron APP 约 400 MiB，APP 体积减少约 95%。词典不在安装包内。
 
-Linux ARM（aarch64，Docker / Xvfb / WebKitGTK）同样通过完整 84 项检查；修复了旧版 WebKitGTK 的缩放几何坐标差异，并让独立导出窗口在映射后完成原生截图。Windows 保留平台适配和构建入口，本轮不做 x64 检查，也不把未运行的平台记作已验证。原项目的 Typora 差异仍见 [功能细节](typora-parity.md)。
+Linux ARM（aarch64，Docker / Xvfb / WebKitGTK）同样通过完整 84 项检查；修复了旧版 WebKitGTK 的缩放几何坐标差异，并让独立导出窗口在映射后完成原生截图。这些 ARM 结果不代替 x64 发行包验证。原项目的 Typora 差异仍见 [功能细节](typora-parity.md)。

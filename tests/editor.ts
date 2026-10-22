@@ -4,6 +4,7 @@ import { blockRanges, renderDocument, setDialect } from '../src/renderer/md';
 import { documentStatistics } from '../src/shared/document-statistics';
 import { transformImage } from '../src/renderer/image-actions';
 import { rangeAction } from '../src/renderer/editing-commands';
+import { displayFileUrl } from '../src/bridge/files';
 
 const runtimeErrors: string[] = [];
 window.addEventListener('error', (event) => runtimeErrors.push(event.message));
@@ -570,7 +571,7 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     for (const source of [input, 'Before ' + input + ' after']) {
       const html = new DOMParser().parseFromString(renderDocument(source, { resolveSrc: (src) => 'file:///document/' + src }).html, 'text/html');
       const image = html.querySelector('img')!;
-      assert(image.getAttribute('src') === 'file:///document/a%20b.png' && image.getAttribute('data-src') === 'keep.png', 'HTML image resolver rewrote the wrong attribute');
+      assert(image.getAttribute('src') === displayFileUrl('file:///document/a%20b.png') && image.getAttribute('data-src') === 'keep.png', 'HTML image resolver rewrote the wrong attribute: ' + image.outerHTML);
       assert(image.getAttribute('width') === '120' && image.style.border === '0px', 'HTML image export lost original dimensions/styles');
     }
   });

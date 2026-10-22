@@ -133,7 +133,7 @@ fn windows_export(
                         let tx = tx.clone();
                         let handler =
                             PrintToPdfCompletedHandler::create(Box::new(move |status, success| {
-                                let _ = tx.send(if status.is_ok() && success.as_bool() {
+                                let _ = tx.send(if status.is_ok() && success {
                                     Ok(())
                                 } else {
                                     Err("PDF 导出失败".into())
