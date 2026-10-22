@@ -1,23 +1,43 @@
+import { uiText } from '../shared/ui-language';
 import { EditorView, WidgetType } from '@codemirror/view';
 import { undo, redo } from '@codemirror/commands';
-import { dialect, renderDocument } from './md';
+import { dialect, renderDocument, documentReferences, MarkdownReferences } from './md';
 import { projectTableInline } from './table-inline';
-import { inlineMathSpans } from './inline-markdown';
+import { inlineMathSpans, inlineSpans } from './inline-markdown';
+import { inlineImages, inlineFootnotes } from './inline-media';
 import { tableText, tableTextNodes } from './table-dom';
 import { textRange } from './editing-ranges';
+import { SearchHighlight, searchHighlights, searchText } from './search-highlights';
+import type { ImageSourceRange } from './image-actions';
+import { displayFileUrl } from '../bridge/files';
 
 export interface MarkdownTable { rows: string[][]; align: ('left' | 'center' | 'right' | '')[]; newline: boolean }
-function cells(line: string): string[] {
-  const parts: string[] = []; let current = '', escaped = false;
-  for (const char of line.trim()) {
-    if (char === '|' && !escaped) { parts.push(current.trim()); current = ''; }
-    else current += char;
+function cellRanges(line: string): { from: number; to: number }[] {
+  const left = line.length - line.trimStart().length, right = line.trimEnd().length;
+  const parts: { from: number; to: number }[] = []; let start = left, escaped = false;
+  for (let i = left; i < right; i++) {
+    const char = line[i];
+    if (char === '|' && !escaped) { parts.push({ from: start, to: i }); start = i + 1; }
     escaped = char === '\\' && !escaped;
   }
-  parts.push(current.trim());
-  if (line.trim().startsWith('|')) parts.shift();
-  if (/(?<!\\)\|\s*$/.test(line)) parts.pop();
-  return parts;
+  parts.push({ from: start, to: right });
+  if (line[left] === '|') parts.shift();
+  if (start === right && line[right - 1] === '|') parts.pop();
+  return parts.map(part => {
+    const text = line.slice(part.from, part.to), from = part.from + text.length - text.trimStart().length;
+    return { from, to: Math.max(from, part.to - text.length + text.trimEnd().length) };
+  });
+}
+function cells(line: string): string[] { return cellRanges(line).map(part => line.slice(part.from, part.to)); }
+function sourceCells(source: string): { from: number; to: number }[][] {
+  const rows: { from: number; to: number }[][] = []; let offset = 0;
+  source.split('\n').forEach((line, index) => {
+    if (index !== 1 && (index === 0 || line.trim())) rows.push(cellRanges(line).map(part => ({ from: offset + part.from, to: offset + part.to })));
+    offset += line.length + 1;
+  }); return rows;
+}
+function setCellRange(cell: HTMLElement, ranges: ReturnType<typeof sourceCells>, base: number, row: number, col: number): void {
+  cell.dataset.sourceFrom = String(base + (ranges[row]?.[col]?.from ?? 0)); cell.dataset.sourceTo = String(base + (ranges[row]?.[col]?.to ?? 0));
 }
 export function parseTable(source: string): MarkdownTable | null {
   const lines = source.trimEnd().split('\n'); if (lines.length < 2) return null;
@@ -37,18 +57,58 @@ export function serializeTable(table: MarkdownTable): string {
     ...table.rows.slice(1).map(row)].join('\n') + (table.newline ? '\n' : '');
 }
 function editable(source: string): string { return source.replace(/\\\|/g, '|').replace(/<br\s*\/?\s*>/gi, '\n'); }
+function sourceOffset(source: string, offset: number): number {
+  let from = 0, position = 0;
+  while (from < source.length && position < offset) {
+    const br = /^<br\s*\/?\s*>/i.exec(source.slice(from));
+    from += br ? br[0].length : source[from] === '\\' && source[from + 1] === '|' ? 2 : 1;
+    position++;
+  }
+  return from;
+}
 function escaped(source: string): string { return source.replace(/\r\n?/g, '\n').replace(/\|/g, '\\|').replace(/\n/g, '<br>'); }
+function cellHighlights(cell: HTMLElement, source: string, view: EditorView): SearchHighlight[] {
+  const length = editable(source).length;
+  return searchHighlights(view.state, Number(cell.dataset.sourceFrom), Number(cell.dataset.sourceTo)).map(hit => ({ ...hit,
+    from: Math.min(length, editable(source.slice(0, hit.from)).length), to: Math.min(length, editable(source.slice(0, hit.to)).length) }));
+}
+const fallbackSearch = new WeakMap<HTMLElement, string>();
 function html(source: string, view: EditorView): string {
   const host = (view as any).__host;
   const root = document.createElement('div'); root.innerHTML = renderDocument(source || ' ', { math: host?.math, resolveSrc: host?.resolveSrc }).html;
   const content = root.querySelector('#write');
   return content?.firstElementChild?.tagName === 'P' ? content.firstElementChild.innerHTML : content?.innerHTML || '';
 }
+function annotateImages(cell: HTMLElement, source: string, view: EditorView): void {
+  const formulas = inlineMathSpans(source), host = (view as any).__host;
+  const images = inlineImages(source, documentReferences(view.state.doc.toString())).filter(image => !formulas.some(math => image.from >= math.from && image.to <= math.to));
+  for (const img of cell.querySelectorAll<HTMLImageElement>('img:not([data-table-image-from])')) {
+    const index = images.findIndex(image => {
+      const resolved = host?.resolveSrc(image.image.src) || image.image.src;
+      return [image.image.src, resolved, displayFileUrl(resolved)].includes(img.getAttribute('src') || '');
+    });
+    if (index < 0) continue;
+    const [image] = images.splice(index, 1); img.dataset.tableImageFrom = String(image.from); img.dataset.tableImageTo = String(image.to);
+  }
+}
 function offsets(cell: HTMLElement): [number, number] {
   const selection = window.getSelection(); if (!selection?.rangeCount || !cell.contains(selection.anchorNode) || !cell.contains(selection.focusNode)) return [0, 0];
   const range = selection.getRangeAt(0), before = range.cloneRange(); before.selectNodeContents(cell); before.setEnd(range.startContainer, range.startOffset);
   const from = tableText(before.cloneContents()).length;
   return [from, from + tableText(range.cloneContents()).length];
+}
+function replacesSource(cell: HTMLElement, event: InputEvent, view: EditorView): boolean {
+  const source = tableText(cell);
+  const protectedRanges = [...inlineImages(source, documentReferences(view.state.doc.toString())), ...inlineMathSpans(source),
+    ...inlineSpans(source).filter(span => ['cm-md-code', 'cm-md-link'].includes(span.className)),
+    ...Array.from(source.matchAll(/<[a-z!/][^>]*(?:>|$)/gi), match => ({ from: match.index!, to: match.index! + match[0].length }))];
+  const point = (node: Node, offset: number) => {
+    const before = document.createRange(); before.selectNodeContents(cell); before.setEnd(node, offset); return tableText(before.cloneContents()).length;
+  };
+  const targets = Array.from(event.getTargetRanges?.() || []).filter(range => cell.contains(range.startContainer) && cell.contains(range.endContainer))
+    .map(range => [point(range.startContainer, range.startOffset), point(range.endContainer, range.endOffset)]);
+  if (!targets.length) targets.push(offsets(cell));
+  return targets.some(([from, to]) => protectedRanges.some(range => from === to ? from > range.from && from < range.to : from < range.to && to > range.from));
 }
 function select(cell: HTMLElement, from = 0, to = tableText(cell).length): void {
   cell.focus(); const length = tableText(cell).length;
@@ -80,10 +140,24 @@ function mathTooltip(cell: HTMLElement, source: string, selection: [number, numb
 }
 function renderCell(cell: HTMLElement, source: string, view: EditorView, active: boolean): void {
   const text = editable(source), selection = active ? offsets(cell) : null;
-  const projected = projectTableInline(cell, text, selection, (tex) => (view as any).__host?.math(tex, false) || tex);
+  const hits = cellHighlights(cell, source, view);
+  const host = (view as any).__host;
+  const projected = projectTableInline(cell, text, selection, (tex) => host?.math(tex, false) || tex, {
+    references: documentReferences(view.state.doc.toString()), resolveSrc: src => host?.resolveSrc(src) || src, measure: () => view.requestMeasure(),
+  }, hits);
   if (projected === null) {
-    if (active) { if (tableText(cell) !== text) { cell.textContent = text; select(cell, ...selection!); } }
-    else cell.innerHTML = html(source, view);
+    if (hits.length) {
+      const key = JSON.stringify([text, hits]);
+      if (fallbackSearch.get(cell) !== key || tableText(cell) !== text) {
+        cell.replaceChildren(searchText(text, hits)); fallbackSearch.set(cell, key); if (active) select(cell, ...selection!);
+      }
+    } else {
+      fallbackSearch.delete(cell);
+      if (active) {
+        if (tableText(cell) !== text) { cell.textContent = text; select(cell, ...selection!); }
+        for (const mark of cell.querySelectorAll('.cm-search-hit')) mark.classList.remove('cm-search-hit', 'is-current');
+      } else { cell.innerHTML = html(source, view); annotateImages(cell, text, view); }
+    }
   } else if (projected && active) select(cell, ...selection!);
   for (const span of cell.querySelectorAll<HTMLElement>('code,a,.cm-md-code,[data-href]')) span.spellcheck = view.dom.dataset.spellcheckCode === 'true';
   mathTooltip(cell, text, selection, view);
@@ -117,18 +191,21 @@ function write(controller: Controller, model: MarkdownTable, row = controller.ro
 }
 
 export class TableWidget extends WidgetType {
-  readonly revision = JSON.stringify(dialect());
-  constructor(readonly source: string, readonly from: number, readonly to: number) { super(); }
+  readonly revision: string;
+  constructor(readonly source: string, readonly from: number, readonly to: number, references: MarkdownReferences = {}, hits: SearchHighlight[] = []) {
+    super(); this.revision = JSON.stringify([dialect(), references, hits]);
+  }
   override eq(other: TableWidget): boolean { return this.source === other.source && this.from === other.from && this.to === other.to && this.revision === other.revision; }
   override ignoreEvent(): boolean { return true; }
   toDOM(view: EditorView): HTMLElement {
     const table = parseTable(this.source)!;
+    const ranges = sourceCells(this.source);
     const root = document.createElement('div'); root.className = 'md-block-widget md-table-widget'; root.contentEditable = 'false';
     root.dataset.from = String(this.from); root.dataset.to = String(this.to); root.dataset.kind = 'table_open';
     root.dataset.revision = this.revision;
-    const toolbar = document.createElement('div'); toolbar.className = 'md-table-toolbar'; toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', '表格工具');
+    const toolbar = document.createElement('div'); toolbar.className = 'md-table-toolbar'; toolbar.setAttribute('role', 'toolbar');
     const menu = document.createElement('div'); menu.className = 'md-table-menu'; menu.hidden = true; menu.setAttribute('role', 'menu');
-    const resize = document.createElement('div'); resize.className = 'md-table-resize'; resize.hidden = true; resize.setAttribute('role', 'dialog'); resize.setAttribute('aria-label', '调整表格尺寸');
+    const resize = document.createElement('div'); resize.className = 'md-table-resize'; resize.hidden = true; resize.setAttribute('role', 'dialog');
     const controller: Controller = {
       root, view, row: 0, col: 0, composing: false, writing: false,
       model: () => parseTable(view.state.sliceDoc(Number(root.dataset.from), Number(root.dataset.to)))!,
@@ -140,8 +217,9 @@ export class TableWidget extends WidgetType {
         syncFocus(this);
         if (this.composing) return;
         const model = this.model(), cell = cellAt(root, this.row, this.col); if (!cell || !model?.rows[this.row]) return;
-        const text = escaped(tableText(cell));
-        if (model.rows[this.row]?.[this.col] === text) { renderCell(cell, text, view, document.activeElement === cell); return; }
+        const content = tableText(cell), source = model.rows[this.row][this.col];
+        if (editable(source) === content) { renderCell(cell, source, view, document.activeElement === cell); return; }
+        const text = escaped(content);
         const selection = offsets(cell);
         model.rows[this.row][this.col] = text; write(this, model);
         // CodeMirror restores its own document selection after a transaction.
@@ -189,9 +267,9 @@ export class TableWidget extends WidgetType {
       },
     };
     controllers.set(root, controller);
-    const button = (label: string, action: string, icon?: string) => {
-      const b = document.createElement('button'); b.type = 'button'; b.title = label; b.setAttribute('aria-label', label); b.dataset.action = action;
-      if (icon) { const i = document.createElement('i'); i.className = 'fa ' + icon; b.append(i); } else b.textContent = label;
+    const button = (action: string, icon?: string) => {
+      const b = document.createElement('button'); b.type = 'button'; b.dataset.action = action;
+      if (icon) { const i = document.createElement('i'); i.className = 'fa ' + icon; b.append(i); }
       b.addEventListener('mousedown', (event) => event.preventDefault());
       b.addEventListener('click', () => {
         if (action === 'resize') {
@@ -200,13 +278,13 @@ export class TableWidget extends WidgetType {
         } else controller.mutate(action);
       }); return b;
     };
-    toolbar.append(button('调整表格', 'resize', 'fa-table'), button('左对齐', 'left', 'fa-align-left'), button('居中对齐', 'center', 'fa-align-center'), button('右对齐', 'right', 'fa-align-right'), button('删除表格', 'deleteTable', 'fa-trash-o'));
-    for (const [label, action] of [['在上方插入行', 'rowBefore'], ['在下方插入行', 'rowAfter'], ['删除行', 'deleteRow'], ['在左侧插入列', 'columnBefore'], ['在右侧插入列', 'columnAfter'], ['删除列', 'deleteColumn']]) menu.append(button(label, action));
-    const sizes = document.createElement('div'); sizes.className = 'md-table-size-grid'; sizes.setAttribute('role', 'grid'); sizes.setAttribute('aria-label', '选择列数与行数');
+    toolbar.append(button('resize', 'fa-table'), button('left', 'fa-align-left'), button('center', 'fa-align-center'), button('right', 'fa-align-right'), button('deleteTable', 'fa-trash-o'));
+    for (const action of ['rowBefore', 'rowAfter', 'deleteRow', 'columnBefore', 'columnAfter', 'deleteColumn']) menu.append(button(action));
+    const sizes = document.createElement('div'); sizes.className = 'md-table-size-grid'; sizes.setAttribute('role', 'grid');
     const dimensions = document.createElement('div'); dimensions.className = 'md-table-dimensions';
     const columns = document.createElement('input'), rows = document.createElement('input');
-    for (const [input, label] of [[columns, '列数'], [rows, '行数']] as const) {
-      input.type = 'text'; input.inputMode = 'numeric'; input.pattern = '[0-9]+'; input.setAttribute('aria-label', label);
+    for (const [input, dimension] of [[columns, 'columns'], [rows, 'rows']] as const) {
+      input.type = 'text'; input.inputMode = 'numeric'; input.pattern = '[0-9]+'; input.dataset.dimension = dimension;
       input.contentEditable = 'false';
       input.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); input.focus(); input.select(); });
       for (const type of ['beforeinput', 'input', 'paste', 'copy', 'cut', 'compositionstart', 'compositionupdate', 'compositionend']) input.addEventListener(type, (event) => event.stopPropagation());
@@ -225,7 +303,7 @@ export class TableWidget extends WidgetType {
     for (let r = 1; r <= 10; r++) for (let c = 1; c <= 6; c++) {
       const tile = document.createElement('button'); tile.type = 'button'; tile.dataset.rows = String(r); tile.dataset.columns = String(c);
       tile.tabIndex = -1;
-      tile.setAttribute('role', 'gridcell'); tile.setAttribute('aria-label', `${c} 列 × ${r} 行`);
+      tile.setAttribute('role', 'gridcell');
       if (r === 1) tile.classList.add('is-header');
       tile.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
       tile.addEventListener('mouseenter', () => previewSize(r, c));
@@ -257,8 +335,9 @@ export class TableWidget extends WidgetType {
       const tr = document.createElement('tr'); (r ? body : head).append(tr);
       row.forEach((source, c) => {
         const cell = document.createElement(r ? 'td' : 'th'); cell.dataset.row = String(r); cell.dataset.col = String(c); cell.contentEditable = 'plaintext-only';
+        setCellRange(cell, ranges, this.from, r, c);
         cell.tabIndex = 0;
-        cell.setAttribute('role', 'textbox'); cell.setAttribute('aria-label', `第 ${r + 1} 行，第 ${c + 1} 列`); cell.setAttribute('spellcheck', 'true');
+        cell.setAttribute('role', 'textbox'); cell.setAttribute('spellcheck', 'true');
         cell.style.textAlign = table.align[c]; renderCell(cell, source, view, false); tr.append(cell);
         cell.addEventListener('focus', () => {
           controller.row = r; controller.col = c;
@@ -268,20 +347,22 @@ export class TableWidget extends WidgetType {
           if (view.state.selection.main.head !== Number(root.dataset.from)) view.dispatch({ selection: { anchor: Number(root.dataset.from) } });
         });
         cell.addEventListener('mousedown', (event) => {
-          const preview = (event.target as HTMLElement).closest<HTMLElement>('.md-table-math-preview'); if (!preview) return;
+          const preview = (event.target as HTMLElement).closest<HTMLElement>('.md-table-math-preview,.md-table-image-preview,.md-table-footnote'); if (!preview || event.button !== 0) return;
           event.preventDefault(); event.stopPropagation();
-          const from = Number(preview.dataset.from) + 1, to = Number(preview.dataset.to) - 1;
+          const image = preview.classList.contains('md-table-image-preview'), note = preview.classList.contains('md-table-footnote');
+          const from = Number(preview.dataset.from) + (image ? Number(preview.dataset.selectionFrom) : note ? 2 : 1);
+          const to = image ? Number(preview.dataset.from) + Number(preview.dataset.selectionTo) : Number(preview.dataset.to) - 1;
           select(cell, from, to); renderCell(cell, controller.model()?.rows[r]?.[c] || '', view, true);
         });
         cell.addEventListener('blur', () => {
           // Windows emits blur synchronously when CodeMirror replaces a focused
           // widget. Dispatching there reenters the active update with stale ranges.
-          const document = view.state.doc, text = escaped(tableText(cell)), original = cell.dataset.source;
+          const document = view.state.doc, content = tableText(cell), text = escaped(content), original = cell.dataset.source;
           queueMicrotask(() => {
             if (!root.isConnected || controllers.get(root) !== controller || view.state.doc !== document || controller.writing || controller.composing) return;
             const model = controller.model();
             if (!model?.rows[r]) return;
-            if (model.rows[r][c] === original && model.rows[r][c] !== text) { model.rows[r][c] = text; write(controller, model); }
+            if (model.rows[r][c] === original && editable(model.rows[r][c]) !== content) { model.rows[r][c] = text; write(controller, model); }
             if (cell.isConnected && globalThis.document.activeElement !== cell) renderCell(cell, model.rows[r][c], view, false);
           });
           menu.hidden = true;
@@ -289,6 +370,12 @@ export class TableWidget extends WidgetType {
         cell.addEventListener('click', (event) => { const link = (event.target as HTMLElement).closest<HTMLElement>('[data-href]'); if (link && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void window.JSBridge?.invoke('shell.openExternal', link.dataset.href); } });
         cell.addEventListener('compositionstart', () => { controller.composing = true; });
         cell.addEventListener('compositionend', () => { controller.composing = false; controller.commit(); });
+        cell.addEventListener('beforeinput', event => {
+          // macOS can replace an adjacent straight quote while inserting a
+          // letter in an HTML attribute. Veto only automatic replacements in
+          // source ranges; native typing, composition and plain-text correction stay native.
+          if (event.cancelable && event.inputType === 'insertReplacementText' && replacesSource(cell, event, view)) event.preventDefault();
+        });
         cell.addEventListener('input', () => controller.commit());
         cell.addEventListener('contextmenu', (event) => {
           controller.row = r; controller.col = c;
@@ -309,7 +396,8 @@ export class TableWidget extends WidgetType {
           if (event.defaultPrevented || event.isComposing || controller.composing) return;
           if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && ['ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(event.key)) {
             const [from, to] = offsets(cell), backward = event.key === 'ArrowLeft' || event.key === 'Backspace';
-            const formula = from === to && inlineMathSpans(tableText(cell)).find((span) => backward ? span.to === from : span.from === from);
+            const rich = [...inlineMathSpans(tableText(cell)), ...inlineImages(tableText(cell), documentReferences(view.state.doc.toString())), ...inlineFootnotes(tableText(cell))];
+            const formula = from === to && rich.find((span) => backward ? span.to === from : span.from === from);
             if (formula) {
               event.preventDefault(); event.stopPropagation();
               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { select(cell, backward ? from - 1 : from + 1, backward ? from - 1 : from + 1); renderCell(cell, controller.model()?.rows[r]?.[c] || '', view, true); }
@@ -347,16 +435,18 @@ export class TableWidget extends WidgetType {
         });
       });
     });
-    root.append(grid); return root;
+    root.append(grid); localizeTable(root); return root;
   }
   override updateDOM(root: HTMLElement, view: EditorView): boolean {
     const model = parseTable(this.source); if (!model) return false;
+    const ranges = sourceCells(this.source);
     const rows = root.querySelectorAll('tr');
     if (rows.length !== model.rows.length || root.querySelectorAll('th').length !== model.align.length) return false;
     root.dataset.from = String(this.from); root.dataset.to = String(this.to);
     const reconfigured = root.dataset.revision !== this.revision; root.dataset.revision = this.revision;
     for (let r = 0; r < model.rows.length; r++) for (let c = 0; c < model.align.length; c++) {
       const cell = cellAt(root, r, c)!; cell.style.textAlign = model.align[c];
+      setCellRange(cell, ranges, this.from, r, c);
       if (document.activeElement === cell) {
         const source = editable(model.rows[r][c]);
         const controller = controllers.get(root);
@@ -369,6 +459,82 @@ export class TableWidget extends WidgetType {
     return true;
   }
   override destroy(root: HTMLElement): void { cleanup.get(root)?.(); cleanup.delete(root); controllers.delete(root); }
+}
+
+const tableLabels: Record<string, [string, string]> = {
+  resize: ['调整表格', 'Resize Table'], left: ['左对齐', 'Align Left'], center: ['居中对齐', 'Align Center'], right: ['右对齐', 'Align Right'],
+  deleteTable: ['删除表格', 'Delete Table'], rowBefore: ['在上方插入行', 'Insert Row Above'], rowAfter: ['在下方插入行', 'Insert Row Below'],
+  deleteRow: ['删除行', 'Delete Row'], columnBefore: ['在左侧插入列', 'Insert Column Before'], columnAfter: ['在右侧插入列', 'Insert Column After'], deleteColumn: ['删除列', 'Delete Column'],
+};
+function localizeTable(root: HTMLElement): void {
+  for (const [selector, zh, en] of [
+    ['.md-table-toolbar', '表格工具', 'Table tools'], ['.md-table-menu', '表格操作', 'Table actions'],
+    ['.md-table-resize', '调整表格尺寸', 'Resize table'], ['.md-table-size-grid', '选择列数与行数', 'Choose columns and rows'],
+    ['[data-dimension="columns"]', '列数', 'Columns'], ['[data-dimension="rows"]', '行数', 'Rows'],
+  ]) root.querySelector(selector)?.setAttribute('aria-label', uiText(zh, en));
+  for (const button of root.querySelectorAll<HTMLButtonElement>('button[data-action]')) {
+    const label = uiText(...tableLabels[button.dataset.action!]);
+    button.title = label; button.setAttribute('aria-label', label);
+    if (button.parentElement?.classList.contains('md-table-menu')) button.textContent = label;
+  }
+  for (const tile of root.querySelectorAll<HTMLElement>('[data-rows][data-columns]')) {
+    const c = tile.dataset.columns, r = tile.dataset.rows;
+    tile.setAttribute('aria-label', uiText(`${c} 列 × ${r} 行`, `${c} columns × ${r} rows`));
+  }
+  for (const cell of root.querySelectorAll<HTMLElement>('td[data-row],th[data-row]')) {
+    const r = Number(cell.dataset.row) + 1, c = Number(cell.dataset.col) + 1;
+    cell.setAttribute('aria-label', uiText(`第 ${r} 行，第 ${c} 列`, `Row ${r}, column ${c}`));
+  }
+}
+/** Update only table controls and accessibility text, retaining native cell selection. */
+export function refreshTableLanguage(view: EditorView): void {
+  for (const root of view.dom.querySelectorAll<HTMLElement>('.md-table-widget')) localizeTable(root);
+}
+
+export function refreshTableMedia(view: EditorView): void {
+  for (const root of view.dom.querySelectorAll<HTMLElement>('.md-table-widget')) {
+    const controller = controllers.get(root); if (!controller || controller.composing || controller.writing) continue;
+    const model = controller.model(); if (!model) continue;
+    for (const cell of root.querySelectorAll<HTMLElement>('td[data-row],th[data-row]')) {
+      renderCell(cell, model.rows[Number(cell.dataset.row)][Number(cell.dataset.col)], view, document.activeElement === cell);
+    }
+  }
+}
+
+/** Store source positions rather than live DOM ranges: leaving a rich cell
+ * can replace its formatted text nodes before the context menu opens. */
+export function tableSelection(view: EditorView): { from: number; to: number } | undefined {
+  const cell = document.activeElement as HTMLElement | null, native = window.getSelection();
+  if (!cell?.matches('td[data-source-from],th[data-source-from]') || !view.dom.contains(cell) ||
+      !native?.anchorNode || !native.focusNode || !cell.contains(native.anchorNode) || !cell.contains(native.focusNode)) return;
+  const base = Number(cell.dataset.sourceFrom), source = view.state.sliceDoc(base, Number(cell.dataset.sourceTo));
+  if (tableText(cell) !== editable(source)) return;
+  const [from, to] = offsets(cell);
+  return { from: base + sourceOffset(source, from), to: base + sourceOffset(source, to) };
+}
+
+export function focusTableRange(view: EditorView, from: number, to: number, preferred?: ImageSourceRange['cell']): boolean {
+  for (const cell of view.dom.querySelectorAll<HTMLElement>('.md-table-widget [data-source-from]')) {
+    const start = Number(cell.dataset.sourceFrom), end = Number(cell.dataset.sourceTo);
+    if (preferred ? Number(cell.dataset.row) !== preferred.row || Number(cell.dataset.col) !== preferred.column ||
+      Number(cell.closest<HTMLElement>('.md-table-widget')?.dataset.from) !== preferred.tableFrom : from < start || to > end) continue;
+    const source = view.state.sliceDoc(start, end);
+    select(cell, editable(source.slice(0, Math.max(0, from - start))).length, editable(source.slice(0, Math.max(0, to - start))).length);
+    renderCell(cell, source, view, true); return true;
+  }
+  return false;
+}
+
+export function tableImageAt(view: EditorView, target: HTMLElement): ImageSourceRange | null {
+  const image = target.closest<HTMLElement>('[data-table-image-from]'), cell = image?.closest<HTMLElement>('td[data-source-from],th[data-source-from]');
+  const root = cell?.closest<HTMLElement>('.md-table-widget');
+  if (!image || !cell || !root || !view.dom.contains(root) || controllers.get(root)?.composing) return null;
+  const base = Number(cell.dataset.sourceFrom), raw = view.state.sliceDoc(base, Number(cell.dataset.sourceTo)), source = editable(raw);
+  if (document.activeElement === cell && tableText(cell) !== source) return null;
+  const start = Number(image.dataset.tableImageFrom), end = Number(image.dataset.tableImageTo);
+  const from = base + sourceOffset(raw, start), to = base + sourceOffset(raw, end);
+  return { from, to, source: source.slice(start, end), rawSource: view.state.sliceDoc(from, to), table: true,
+    cell: { tableFrom: Number(root.dataset.from), row: Number(cell.dataset.row), column: Number(cell.dataset.col) } };
 }
 
 export function tableAction(view: EditorView, action: string): boolean {

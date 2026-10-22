@@ -1,3 +1,4 @@
+use crate::i18n::text as tr;
 use crate::{evaluate, state::*};
 use serde_json::{json, Value};
 use std::{fs, path::Path, sync::mpsc, time::Duration};
@@ -59,7 +60,7 @@ pub fn render(
         }
         .max(1.);
         if mode == "png" && height > 30000. {
-            return Err("文档太长，无法导出为单张图片，请导出为 PDF".into());
+            return Err(tr("文档太长，无法导出为单张图片，请导出为 PDF", "The document is too long for a single image. Export it as PDF instead.").into());
         }
         if mode == "png" {
             window
@@ -136,7 +137,7 @@ fn windows_export(
                                 let _ = tx.send(if status.is_ok() && success {
                                     Ok(())
                                 } else {
-                                    Err("PDF 导出失败".into())
+                                    Err(tr("PDF 导出失败", "PDF export failed").into())
                                 });
                                 Ok(())
                             }));

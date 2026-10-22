@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 
 pub type Result<T> = std::result::Result<T, String>;
 pub fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
+    crate::i18n::external_error(&e.to_string())
 }
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -59,6 +59,8 @@ pub fn copy_tree(from: &Path, to: &Path) -> Result<()> {
 }
 impl AppState {
     pub fn new(app: &AppHandle) -> Result<Self> {
+        let locale = std::env::var("LC_ALL").or_else(|_| std::env::var("LANG")).unwrap_or_default();
+        crate::i18n::configure("auto", Some(&locale));
         let override_dir = std::env::var_os("AROPYT_DATA_DIR").map(PathBuf::from);
         let data = override_dir
             .clone()
@@ -112,7 +114,7 @@ impl AppState {
             serde_json::from_str(include_str!("../../resources/defaults.json")).map_err(err)?;
         if let Ok(raw) = fs::read_to_string(data.join("conf/conf.user.json")) {
             let values: Value = deser_hjson::from_str(&raw)
-                .map_err(|e| format!("无法读取偏好设置，原文件已保留：{e}"))?;
+                .map_err(|e| format!("{}{e}", crate::i18n::text("无法读取偏好设置，原文件已保留：", "Unable to read preferences. The original file has been preserved: ")))?;
             if let Some(map) = values.as_object() {
                 for (k, v) in map {
                     if !v.is_null() {
@@ -121,6 +123,7 @@ impl AppState {
                 }
             }
         }
+        crate::i18n::configure(settings["menuLanguage"].as_str().unwrap_or("auto"), None);
         if !settings["remapPunctuation"].is_boolean() {
             settings["remapPunctuation"] = json!(matches!(
                 settings["remapPunctuation"].as_str(),
@@ -147,7 +150,20 @@ impl AppState {
         atomic_write(
             &self.data.join("conf/conf.user.json"),
             &serde_json::to_vec_pretty(&*s).map_err(err)?,
-        )
+        )?;
+        // A concurrent preference change must not install an older language
+        // after a newer setting has already been persisted.
+        if key == "menuLanguage" {
+            crate::i18n::configure(s[key].as_str().unwrap_or("auto"), None);
+        }
+        Ok(())
+    }
+    pub fn update_ui_language(&self, app: &AppHandle, locale: Option<&str>) {
+        let s = self.settings.lock().unwrap();
+        crate::i18n::configure(s["menuLanguage"].as_str().unwrap_or("auto"), locale);
+        if let Some(prefs) = app.get_webview_window("preferences") {
+            let _ = prefs.set_title(crate::i18n::text("偏好设置", "Preferences"));
+        }
     }
     pub fn recent(&self, key: &str, path: &str, add: bool) -> Result<()> {
         if add && self.config()["recordRecent"] == false {

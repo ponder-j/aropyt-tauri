@@ -23,6 +23,7 @@ export function inlineSpans(source: string): InlineSpan[] {
   const result: InlineSpan[] = [];
   configured.parse(source).iterate({ enter(ref) {
     const node = ref.node, type = node.name;
+    if (type === 'Image') return false;
     const style: Record<string, string> = { StrongEmphasis: 'cm-md-strong', Emphasis: 'cm-md-emphasis', Strikethrough: 'cm-md-strike', InlineCode: 'cm-md-code', Subscript: 'cm-md-sub', Superscript: 'cm-md-sup' };
     if (style[type]) {
       const first = node.firstChild, last = node.lastChild;
@@ -55,11 +56,12 @@ export function inlineSpans(source: string): InlineSpan[] {
 
 /** Leave constructs with their own rich widget (images, math, TOC, HTML, etc.)
  * on that path. Text-only paragraphs can retain one native caret throughout. */
-export function nativeParagraph(source: string): boolean {
+export function nativeParagraph(source: string, richInline = false): boolean {
   const settings = dialect();
-  if (/!\[|\[\^|^\s*\[toc\]\s*$|&(?:#\w+|\w+);/i.test(source)) return false;
-  if (/<(?!\/?(?:u|mark|s|strong|em|sup|sub)>)[a-z!/]/i.test(source)) return false;
+  if ((!richInline && /!\[|\[\^|<img\b/i.test(source)) || /^\s*\[toc\]\s*$|&(?:#\w+|\w+);/i.test(source)) return false;
+  const text = richInline ? source.replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, '') : source;
+  if (/<(?!\/?(?:u|mark|s|strong|em|sup|sub)>)[a-z!/]/i.test(text)) return false;
   if (!settings.singleLineBreaks && source.trim().includes('\n')) return false;
-  if (settings.smartQuotes && /["']/.test(source) || settings.smartDash && /--|\.\.\./.test(source)) return false;
+  if (settings.smartQuotes && /["']/.test(text) || settings.smartDash && /--|\.\.\./.test(text)) return false;
   return true;
 }

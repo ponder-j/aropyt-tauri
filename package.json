@@ -15,7 +15,7 @@
     "start": "node tools/tauri.mjs dev",
     "tauri": "node tools/tauri.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node tools/test-platform.mjs && node tools/wordcount-test.mjs && node tools/test-tauri.mjs",
+    "test": "node tools/test-platform.mjs && node tools/wordcount-test.mjs && node tools/test-localization.mjs && node tools/test-tauri.mjs",
     "test:app": "node tools/test-tauri.mjs",
     "test:editor": "node tools/test-tauri.mjs --editor",
     "test:spelling": "node tools/test-tauri.mjs --spelling",

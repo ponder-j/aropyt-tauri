@@ -1,9 +1,9 @@
 import './polyfills';
+import { setUiLanguage } from '../shared/ui-language';
 import { invoke as nativeInvoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { buildMenu, menuLanguage } from './menu';
-import { MenuItemConstructorOptions, setMenuSettings, platform } from './menu-host';
+import { MenuItemConstructorOptions, serializeMenu, setMenuSettings, platform } from './menu-host';
 import { localFileUrl, filePath } from './files';
 import { Spelling, installUnderlines } from './spelling';
 const callbacks=new Set<(event:any)=>void>();
@@ -13,23 +13,30 @@ const raw=async(method:string,...args:any[]):Promise<any>=>{
   try{return await nativeInvoke('bridge',{method,args});}catch(error){throw new Error(String(error));}
 };
 const spelling=new Spelling(raw,publish);
-let menuCallbacks=new Map<string,()=>void>();
 let menuLines:string[]=[];
+const menuInstance=`${getCurrentWebviewWindow().label}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+let menuGeneration=0;
 let settings:Record<string,any>={};
 let refreshing:Promise<void>|undefined;
+let refreshAgain=false;
 async function refreshMenu():Promise<void>{
-  if(refreshing)return refreshing;
+  if(refreshing){refreshAgain=true;return refreshing;}
   refreshing=(async()=>{
-    settings=await raw('setting.getAll');setMenuSettings(settings);
-    const themes=await raw('setting.getThemes');
-    const template=buildMenu({send:(type,arg)=>publish({type,arg}),listThemes:()=>themes,currentTheme:()=>settings.theme,openFile:file=>publish({type:'open-file',arg:file})});
-    const next=new Map<string,()=>void>();menuLines=[];let counter=0;
-    const serialize=(entries:MenuItemConstructorOptions[],depth=0):any[]=>entries.map(entry=>{
-      const id='menu-'+counter++;if(entry.click)next.set(id,entry.click);
-      const {click,...value}=entry;menuLines.push('  '.repeat(depth)+(entry.type==='separator'?'----':entry.label||entry.role||'')+(entry.accelerator?'  ['+entry.accelerator+']':''));
-      return {...value,id,submenu:entry.submenu?serialize(entry.submenu,depth+1):undefined};
-    });
-    const value=serialize(template);menuCallbacks=next;await raw('menu.install',value);
+    do {
+      refreshAgain=false;
+      settings=await raw('setting.getAll');setMenuSettings(settings);setUiLanguage(menuLanguage());
+      const themes=await raw('setting.getThemes');
+      const template=buildMenu({listThemes:()=>themes,currentTheme:()=>settings.theme});
+      menuLines=[];
+      const describe=(entries:MenuItemConstructorOptions[],depth=0):void=>{for(const entry of entries){
+        menuLines.push('  '.repeat(depth)+(entry.type==='separator'?'----':entry.label||entry.role||'')+(entry.accelerator?'  ['+entry.accelerator+']':''));
+        if(entry.submenu)describe(entry.submenu,depth+1);
+      }};
+      describe(template);
+      // Unique generations also prevent a queued event from an old native menu
+      // from accidentally selecting a different item after replacement.
+      await raw('menu.install',serializeMenu(template,`${menuInstance}-${++menuGeneration}`));
+    } while(refreshAgain);
   })().finally(()=>{refreshing=undefined;});return refreshing;
 }
 async function invoke(method:string,...args:any[]):Promise<any>{
@@ -48,19 +55,27 @@ async function invoke(method:string,...args:any[]):Promise<any>{
 }
 (window as any).JSBridge={invoke,send:(channel:string,payload?:unknown)=>{void raw('bridge.send',channel,payload).catch(console.error);},on:(cb:(e:any)=>void)=>{callbacks.add(cb);while(pending.length)cb(pending.shift());},pathForFile:(file:File)=>(file as any).__aropytPath||'',localFileUrl};
 const ready=(async()=>{
-  await listen<any>('aropyt:event',({payload})=>{
+  await getCurrentWebviewWindow().listen<any>('aropyt:event',({payload})=>{
     if(payload.type==='native-menu'){
       if(payload.arg.role){void role(payload.arg.role);return;}
-      menuCallbacks.get(payload.arg.id)?.();return;
+      const {event,action,arg}=payload.arg;
+      if(event==='bridge'&&action==='clearRecent'){void invoke('setting.clearRecentDocuments');return;}
+      if(event==='menu')publish({type:'menu',arg:{action,arg}});
+      else if(event==='open-file')publish({type:'open-file',arg});
+      return;
     }
     if(payload.type==='dictionary-installed'){spelling.invalidate(payload.arg);void spelling.handle('spellcheck.reset',[]);}
     if(payload.type==='dictionary-users')void spelling.reloadUsers();
     if(payload.type==='setting-changed'){
+      if(payload.arg.key==='menuLanguage'){settings.menuLanguage=payload.arg.value;setMenuSettings(settings);setUiLanguage(menuLanguage());}
       void refreshMenu();if(['presetSpellCheck','spellCheck'].includes(payload.arg.key))void spelling.handle('spellcheck.reset',[]);
     }
     publish(payload);
   });
+  settings=await raw('setting.getAll');setMenuSettings(settings);setUiLanguage(menuLanguage());
+  await raw('app.setUiLocale',navigator.language);
   await spelling.initialize();
+  await refreshMenu();
 })();
 async function role(name:string):Promise<void>{
   if(['cut','copy','paste','selectAll'].includes(name)){await invoke('webContents.'+name);return;}

@@ -55,7 +55,7 @@ pub fn read_text(st: &AppState, file: &str, force: Option<&str>) -> Result<Value
     let bytes = fs::read(&p).map_err(err)?;
     let cached = st.encodings.lock().unwrap().get(file).cloned();
     let enc = if let Some(label) = force.or(cached.as_deref()) {
-        encoding(label).ok_or_else(|| format!("未知编码：{label}"))?
+        encoding(label).ok_or_else(|| format!("{}{label}", crate::i18n::text("未知编码：", "Unknown encoding: ")))?
     } else if let Some((e, _)) = Encoding::for_bom(&bytes) {
         e
     } else {
@@ -94,7 +94,7 @@ pub fn write_text(st: &AppState, file: &str, content: &str, force: Option<&str>)
     }
     let cached = st.encodings.lock().unwrap().get(file).cloned();
     let name = force.or(cached.as_deref()).unwrap_or("utf-8");
-    let enc = encoding(name).ok_or_else(|| format!("未知编码：{name}"))?;
+    let enc = encoding(name).ok_or_else(|| format!("{}{name}", crate::i18n::text("未知编码：", "Unknown encoding: ")))?;
     let bytes = if enc == UTF_16LE {
         body.encode_utf16().flat_map(u16::to_le_bytes).collect()
     } else if enc == UTF_16BE {
@@ -102,7 +102,7 @@ pub fn write_text(st: &AppState, file: &str, content: &str, force: Option<&str>)
     } else {
         let (bytes, _, loss) = enc.encode(&body);
         if loss {
-            return Err(format!("内容包含 {name} 无法保存的字符，请使用 UTF-8。"));
+            return Err(if crate::i18n::is_chinese() { format!("内容包含 {name} 无法保存的字符，请使用 UTF-8。") } else { format!("The content contains characters that {name} cannot save. Use UTF-8 instead.") });
         }
         bytes.into_owned()
     };

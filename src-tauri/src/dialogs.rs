@@ -1,3 +1,4 @@
+use crate::i18n::text as tr;
 use serde_json::{json, Value};
 use std::path::Path;
 use tauri::{AppHandle, WebviewWindow};
@@ -36,7 +37,7 @@ fn file_dialog(
                 })
                 .unwrap_or_default();
             if !exts.is_empty() {
-                d = d.add_filter(filter["name"].as_str().unwrap_or("Files"), &exts);
+                d = d.add_filter(filter["name"].as_str().unwrap_or(tr("文件", "Files")), &exts);
             }
         }
     }
@@ -46,7 +47,7 @@ pub fn open(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
     let properties = opts["properties"].as_array().cloned().unwrap_or_default();
     let folder = properties.iter().any(|v| v == "openDirectory");
     let multiple = properties.iter().any(|v| v == "multiSelections");
-    let d = file_dialog(app, win, opts);
+    let d = file_dialog(app, win, opts).set_title(opts["title"].as_str().unwrap_or(if folder { tr("打开文件夹", "Open Folder") } else { tr("打开文件", "Open File") }));
     let paths = if folder {
         if multiple {
             d.blocking_pick_folders()
@@ -67,19 +68,21 @@ pub fn open(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
 }
 pub fn save(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
     let p = file_dialog(app, win, opts)
+        .set_title(opts["title"].as_str().unwrap_or(tr("保存文件", "Save File")))
         .blocking_save_file()
         .map(|p| p.to_string());
     json!({"canceled":p.is_none(),"filePath":p})
 }
 pub fn message(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
-    let labels: Vec<String> = opts["buttons"]
+    let mut labels: Vec<String> = opts["buttons"]
         .as_array()
         .map(|v| {
             v.iter()
                 .filter_map(|s| s.as_str().map(String::from))
                 .collect()
         })
-        .unwrap_or_else(|| vec!["OK".into()]);
+        .unwrap_or_else(|| vec![tr("确定", "OK").into()]);
+    if labels.is_empty() { labels.push(tr("确定", "OK").into()); }
     let buttons = match labels.as_slice() {
         [a] => MessageDialogButtons::OkCustom(a.clone()),
         [a, b] => MessageDialogButtons::OkCancelCustom(a.clone(), b.clone()),

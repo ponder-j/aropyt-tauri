@@ -17,7 +17,7 @@ export class StatisticsControl {
     this.button = document.getElementById('footer-word-count')!;
     this.button.setAttribute('aria-haspopup', 'menu');
     this.panel = document.createElement('div'); this.panel.id = 'word-count-popover';
-    this.panel.setAttribute('role', 'menu'); this.panel.setAttribute('aria-label', '字数统计'); this.panel.hidden = true;
+    this.panel.setAttribute('role', 'menu'); this.panel.hidden = true;
     document.body.append(this.panel);
     this.button.addEventListener('mousedown', (event) => event.preventDefault());
     this.button.addEventListener('click', () => this.toggle());
@@ -68,6 +68,7 @@ export class StatisticsControl {
     label.textContent = statisticsSelectionLabel(this.data);
     this.button.title = lang === 'zh' ? '字数统计' : 'Word count';
     this.button.setAttribute('aria-label', this.button.title);
+    this.panel.setAttribute('aria-label', this.button.title);
     this.panel.lang = lang;
     this.button.hidden = !this.data.visible;
     if (!this.data.visible || settings.showStatusBar === false) this.dismiss();

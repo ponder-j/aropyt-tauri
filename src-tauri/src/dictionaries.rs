@@ -1,3 +1,4 @@
+use crate::i18n::text as tr;
 use crate::{files::*, state::*};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
@@ -21,7 +22,7 @@ pub fn exists(st: &AppState, lang: &str) -> bool {
 }
 pub fn read(st: &AppState, lang: &str) -> Result<Value> {
     if !exists(st, lang) {
-        return Err(format!("尚未安装 {lang} 拼写词典"));
+        return Err(format!("{} {lang}", tr("尚未安装拼写词典：", "Spelling dictionary is not installed:")));
     }
     let mut result = vec![];
     for ext in ["aff", "dic"] {
@@ -37,10 +38,10 @@ fn normalize(bytes: Vec<u8>, encoding_name: &str, aff: bool) -> Result<Vec<u8>> 
     if encoding_name.eq_ignore_ascii_case("UTF-8") {
         return Ok(bytes);
     }
-    let enc = encoding(encoding_name).ok_or("不支持的词典编码")?;
+    let enc = encoding(encoding_name).ok_or(tr("不支持的词典编码", "Unsupported dictionary encoding"))?;
     let (text, _, loss) = enc.decode(&bytes);
     if loss {
-        return Err("词典编码无效".into());
+        return Err(tr("词典编码无效", "Invalid dictionary encoding").into());
     }
     let text = if aff {
         regex::Regex::new(r"(?m)^SET\s+[^\r\n]+")
@@ -54,7 +55,7 @@ fn normalize(bytes: Vec<u8>, encoding_name: &str, aff: bool) -> Result<Vec<u8>> 
 }
 fn write_pack(st: &AppState, lang: &str, aff: &[u8], dic: &[u8], license: &str) -> Result<()> {
     if !valid_language(lang) {
-        return Err("未知词典语言".into());
+        return Err(tr("未知词典语言", "Unknown dictionary language").into());
     }
     let root = st.data.join("dictionaries");
     fs::create_dir_all(&root).map_err(err)?;
@@ -80,7 +81,7 @@ pub fn install(st: &AppState, lang: &str) -> Result<Value> {
     let manifest = manifest();
     let item = &manifest["languages"][lang];
     if item.is_null() {
-        return Err("未知词典语言".into());
+        return Err(tr("未知词典语言", "Unknown dictionary language").into());
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -98,7 +99,7 @@ pub fn install(st: &AppState, lang: &str) -> Result<Value> {
             .bytes()
             .map_err(err)?;
         if bytes.len() > 60_000_000 {
-            return Err("词典文件过大".into());
+            return Err(tr("词典文件过大", "The dictionary file is too large").into());
         }
         let bytes = normalize(
             bytes.to_vec(),
@@ -107,7 +108,7 @@ pub fn install(st: &AppState, lang: &str) -> Result<Value> {
         )?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
         if hash != info["sha256"].as_str().unwrap() {
-            return Err(format!("{lang}.{ext} 校验失败，未安装词典。"));
+            return Err(format!("{lang}.{ext} {}", tr("校验失败，未安装词典。", "failed verification. The dictionary was not installed.")));
         }
         files.push(bytes);
     }
@@ -137,7 +138,7 @@ pub fn import(st: &AppState, lang: &str, aff: &Path, dic: &Path) -> Result<Value
             .and_then(|s| s.trim().parse::<usize>().ok())
             .is_none()
     {
-        return Err("请选择有效的 Hunspell .aff 和 .dic 文件。".into());
+        return Err(tr("请选择有效的 Hunspell .aff 和 .dic 文件。", "Select valid Hunspell .aff and .dic files.").into());
     }
     write_pack(st, lang, &aff, &dic, "User imported Hunspell dictionary")?;
     Ok(json!({"installed":true,"language":lang}))

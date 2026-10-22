@@ -1,3 +1,5 @@
+import { uiText, setUiLanguage } from '../shared/ui-language';
+import { selectedLines } from './selected-lines';
 import { DocEditor, getDocSnapshot, getHeadings, lineTransform, replaceSelection, wrapSelection } from './editor';
 import {
   BlockRange, escapeHtml, extractHeadings, Heading, renderDocument, renderToc, blockRanges,
@@ -12,6 +14,8 @@ import { rememberDiagram } from './diagram-preview';
 import { StatisticsControl } from './statistics-control';
 import { SpellcheckControl } from './spellcheck-control';
 import { EditorContextMenu } from './context-menu';
+import { SidebarControls, type FileSort } from './sidebar-controls';
+import { SidebarSearch } from './sidebar-search';
 
 declare global {
   interface Window {
@@ -61,7 +65,7 @@ const state: AppState = {
   dark: false,
   statusBar: true,
   sidebarVisible: true,
-  panel: 'outline',
+  panel: 'files',
   focusMode: false,
   typewriterMode: false,
   sourceMode: false,
@@ -74,7 +78,11 @@ let settings: Record<string, any> = {};
 let contextMenu: EditorContextMenu | undefined;
 let mathReady: Promise<void> | null = null;
 let mermaidReady: Promise<any> | null = null;
-let fileListMode = false;
+let fileListMode = true;
+let sidebarControls: SidebarControls | undefined;
+let sidebarSearch: SidebarSearch | undefined;
+let fileTreeRevision = 0;
+let folderSearchRevision = 0;
 let draftTimer: number | undefined;
 let draftPending: Promise<unknown> = Promise.resolve();
 let currentDraft: string | null = null;
@@ -87,7 +95,7 @@ function scheduleDraft(): void {
     draftPending = draftPending.catch(() => {}).then(async () => {
       currentDraft = await invoke<string>('document.saveDraft', file, content, encoding);
     });
-    void draftPending.catch((error) => notify('草稿备份失败：' + String(error), 'error'));
+    void draftPending.catch((error) => notify(uiText('草稿备份失败：', 'Draft backup failed: ') + String(error), 'error'));
   }, 1200);
 }
 
@@ -276,7 +284,7 @@ function renderBlockHtml(src: string): string | null {
     const label = escapeHtml(def[1]);
     return `<div class="md-footnote md-def-footnote" data-label="${label}">` +
       `<span class="md-fn-count">[^${label}]:</span> ${escapeHtml(body)}` +
-      ` <a class="footnote-backref" href="#fnref${label}" title="Jump back to reference">\u21A9</a></div>`;
+      ` <a class="footnote-backref" href="#fnref${label}" title="${uiText('返回引用', 'Jump back to reference')}">\u21A9</a></div>`;
   }
 
   // Footnote references only resolve when their definitions are in the same
@@ -347,7 +355,7 @@ function buildOutline(): void {
       const toggle = document.createElement('button');
       const collapsed = collapsedHeadings.has(heading.id);
       toggle.className = 'outline-toggle'; toggle.textContent = collapsed ? '▸' : '▾';
-      toggle.setAttribute('aria-label', collapsed ? '展开章节' : '折叠章节');
+      toggle.setAttribute('aria-label', collapsed ? uiText('展开章节', 'Expand section') : uiText('折叠章节', 'Collapse section'));
       toggle.addEventListener('click', (event) => { event.stopPropagation();
         if (collapsed) collapsedHeadings.delete(heading.id); else collapsedHeadings.add(heading.id); buildOutline(); });
       el.querySelector('.outline-item-wrapper')?.prepend(toggle);
@@ -365,21 +373,48 @@ interface TreeNode {
   name: string;
   path: string;
   isDir: boolean;
+  mtime?: number;
+  size?: number;
+  preview?: string[];
   children?: TreeNode[];
 }
 
 async function loadTree(dir: string, depth = 0): Promise<TreeNode[]> {
-  const entries = await invoke<{ name: string; path: string; isDir: boolean }[]>('fs.readDir', dir).catch(() => []);
+  const entries = await invoke<TreeNode[]>('fs.readDir', dir).catch(() => []);
   const out: TreeNode[] = [];
   for (const e of entries) {
     if (e.isDir) {
       if (depth >= 2) continue;
-      out.push({ name: e.name, path: e.path, isDir: true, children: await loadTree(e.path, depth + 1) });
+      out.push({ ...e, children: await loadTree(e.path, depth + 1) });
     } else if (/\.(md|markdown|mdown|txt|rmd)$/i.test(e.name)) {
-      out.push({ name: e.name, path: e.path, isDir: false });
+      out.push(e);
     }
   }
-  return out;
+  return sortFiles(out);
+}
+
+function fileSort(): { by: FileSort; descending: boolean } {
+  return { by: ['name', 'modified'].includes(settings.sidebarSort) ? settings.sidebarSort : 'natural', descending: settings.sidebarSortDescending === true };
+}
+
+function sortFiles(nodes: TreeNode[]): TreeNode[] {
+  const { by, descending } = fileSort();
+  return nodes.sort((a, b) => Number(b.isDir) - Number(a.isDir) || (descending ? -1 : 1) *
+    ((by === 'modified' ? (a.mtime || 0) - (b.mtime || 0) : 0) || a.name.localeCompare(b.name, undefined, { numeric: by === 'natural' })));
+}
+
+function renderFileCards(nodes: TreeNode[], host: HTMLElement): void {
+  for (const node of nodes) {
+    const row = document.createElement('div'); row.className = 'file-library-file-node file-list-card'; row.dataset.path = node.path;
+    row.tabIndex = 0; row.setAttribute('role', 'button'); row.title = node.path;
+    row.classList.toggle('active', node.path === state.file);
+    const ext = /\.[^.]+$/.exec(node.name)?.[0] || '';
+    row.innerHTML = `<div class="file-card-name"><strong>${escapeHtml(node.name.slice(0, node.name.length - ext.length))}</strong><span class="file-card-extension">${escapeHtml(ext)}</span></div>` +
+      `<div class="file-card-preview">${(node.preview || []).map(line => `<div>${escapeHtml(line)}</div>`).join('')}</div>`;
+    row.addEventListener('click', () => void openFile(node.path));
+    row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openFile(node.path); } });
+    host.append(row);
+  }
 }
 
 function renderTree(nodes: TreeNode[], container: HTMLElement, depth = 0): void {
@@ -411,21 +446,34 @@ function renderTree(nodes: TreeNode[], container: HTMLElement, depth = 0): void 
 }
 
 async function refreshFileTree(): Promise<void> {
+  const revision = ++fileTreeRevision;
   const host = $('#file-library-tree');
   if (!host) return;
   const rootFolder = state.folder || state.file?.replace(/[\\/][^\\/]+$/, '');
+  sidebarControls?.update(state.panel, fileListMode);
   if (!rootFolder) {
     host.innerHTML = '';
     host.setAttribute('data-state', 'empty');
     return;
   }
   const tree = await loadTree(rootFolder);
+  const flatten = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((node) => node.isDir ? flatten(node.children || []) : [node]);
+  const list = fileListMode ? sortFiles(flatten(tree)) : [];
+  if (fileListMode) await Promise.all(list.map(async node => {
+    if ((node.size || 0) > 1024 * 1024) return;
+    const data = await invoke<{ content: string } | string>('fs.readText', node.path, 'utf-8').catch(() => '');
+    const text = typeof data === 'string' ? data : data.content;
+    node.preview = (text || '').slice(0, 4096).split(/\r?\n/).map(line => line.replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '').trim()).filter(Boolean).slice(0, 2);
+  }));
+  if (revision !== fileTreeRevision) return;
+  const composer = host.querySelector<HTMLElement>('#sidebar-new-file-row');
+  const composing = composer?.contains(document.activeElement);
   host.innerHTML = '';
   host.setAttribute('data-state', 'rendered');
   if (fileListMode) {
-    const flatten = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((node) => node.isDir ? flatten(node.children || []) : [node]);
-    renderTree(flatten(tree).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), host);
+    renderFileCards(list, host);
   } else renderTree(tree, host);
+  if (composer) { host.append(composer); if (composing) composer.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true }); }
   const label = $('#sidebar-footer-main-item-label');
   if (label) label.textContent = rootFolder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || rootFolder;
 }
@@ -508,7 +556,7 @@ function setDirty(dirty: boolean): void {
 }
 
 function updateTitle(): void {
-  const untitled = state.lang === 'zh' ? '未命名' : 'Untitled';
+  const untitled = state.lang === 'zh' ? '未命名' : uiText('未命名', 'Untitled');
   const name = state.file ? state.file.replace(/\\/g, '/').split('/').pop() : untitled;
   const mark = state.dirty ? ' •' : '';
   const title = `${name}${mark} - Aropyt`;
@@ -518,8 +566,8 @@ function updateTitle(): void {
   document.title = title;
 }
 
-async function openFile(file: string): Promise<void> {
-  if (!(await confirmSave(true))) return;
+async function openFile(file: string, confirmed = false): Promise<void> {
+  if (!confirmed && !(await confirmSave(true))) return;
   const res = await invoke<{ content: string; encoding: string } | null>('document.getContent', file);
   if (!res) return;
   await clearDraft();
@@ -541,7 +589,7 @@ async function saveFile(saveAs = false): Promise<boolean> {
   if (!target || saveAs) {
     const configured = settings.defaultExtension === 'custom' ? settings.customExtension : settings.defaultExtension;
     const extension = /^\.[a-z0-9]+$/i.test(String(configured)) ? String(configured) : '.md';
-    const suggested = target || (state.folder ? state.folder + '/Untitled' + extension : 'Untitled' + extension);
+    const suggested = target || (state.folder ? state.folder + '/' + uiText('未命名', 'Untitled') + extension : uiText('未命名', 'Untitled') + extension);
     const picked = await invoke<string | null>('export.saveFile', {
       defaultPath: suggested,
       filters: [{ name: 'Markdown', extensions: [extension.slice(1)] }],
@@ -564,7 +612,7 @@ async function confirmSave(switchingFile = false): Promise<boolean> {
   if (!state.dirty) return true;
   if (switchingFile && settings.saveWithoutAsking && state.file) return saveFile();
   const result = await invoke<{ response: number }>('dialog.showMessageBox', {
-    type: 'warning', message: '是否保存当前文档的更改？', buttons: ['保存', '不保存', '取消'], defaultId: 0, cancelId: 2,
+    type: 'warning', message: uiText('是否保存当前文档的更改？', 'Save changes to the current document?'), buttons: [uiText('保存', 'Save'), uiText('不保存', 'Don’t Save'), uiText('取消', 'Cancel')], defaultId: 0, cancelId: 2,
   });
   if (result.response === 1) { await clearDraft(); return true; }
   return result.response === 0 ? saveFile() : false;
@@ -604,8 +652,7 @@ function toggleHeading(level: number): void {
 function listPrefixToggle(prefix: (i: number) => string, test: RegExp): void {
   const view = editor.view;
   const sel = view.state.selection.main;
-  const first = view.state.doc.lineAt(sel.from).number;
-  const last = view.state.doc.lineAt(sel.to).number;
+  const { first, last } = selectedLines(view.state);
   let all = true;
   for (let n = first; n <= last; n++) if (!test.test(view.state.doc.line(n).text)) all = false;
 
@@ -669,7 +716,7 @@ function zoom(delta: number): void {
 async function prepareExport(withStyles = true): Promise<string> {
   await loadMathJax();
   (window as any).MathJax?.texReset?.();
-  const title = state.file ? state.file.replace(/\\/g, '/').split('/').pop()!.replace(/\.md$/, '') : 'Untitled';
+  const title = state.file ? state.file.replace(/\\/g, '/').split('/').pop()!.replace(/\.md$/, '') : uiText('未命名', 'Untitled');
   return createExportDocument({
     source: editor.value, title,
     styles: await invoke<string>('export.getStyles', state.theme, withStyles),
@@ -679,7 +726,7 @@ async function prepareExport(withStyles = true): Promise<string> {
     image: (src) => invoke<string>('export.inlineImage', src),
     diagram: async (source) => {
       const mermaid = await loadMermaid();
-      if (!mermaid) throw new Error('Mermaid 引擎加载失败');
+      if (!mermaid) throw new Error(uiText('Mermaid 引擎加载失败', 'Could not load the Mermaid engine'));
       const { svg } = await mermaid.render('export-mmd-' + ++renderSeq, source);
       return svg;
     },
@@ -690,18 +737,18 @@ async function exportFile(format: 'html' | 'pdf' | 'png' | 'print', withStyles =
   try {
     const html = await prepareExport(withStyles);
     if (format === 'print') { await invoke('export.print', html); return; }
-    const title = state.file ? state.file.replace(/\\/g, '/').split('/').pop()!.replace(/\.[^.]+$/, '') : 'Untitled';
+    const title = state.file ? state.file.replace(/\\/g, '/').split('/').pop()!.replace(/\.[^.]+$/, '') : uiText('未命名', 'Untitled');
     const payload = format === 'html' ? { content: html } : {
       base64: await invoke<string>(format === 'pdf' ? 'export.htmlToPDF' : 'export.htmlToImage', html),
     };
-    if ('base64' in payload && typeof payload.base64 !== 'string') throw new Error('导出生成失败');
+    if ('base64' in payload && typeof payload.base64 !== 'string') throw new Error(uiText('导出生成失败', 'Could not generate the export'));
     const picked = await invoke<string | { error: string } | null>('export.saveFile', {
       defaultPath: await invoke<string>('export.defaultPath', state.file, title + '.' + format),
       filters: [{ name: format.toUpperCase(), extensions: [format] }], ...payload,
     });
     if (picked && typeof picked === 'object') throw new Error(picked.error);
-    if (picked) { notify('Exported to ' + picked, 'success'); if (settings.openAfterExport) await invoke('shell.showItemInFolder', picked); }
-  } catch (error) { notify('导出失败：' + String(error), 'error', 7000); }
+    if (picked) { notify(uiText('已导出至 ', 'Exported to ') + picked, 'success'); if (settings.openAfterExport) await invoke('shell.showItemInFolder', picked); }
+  } catch (error) { notify(uiText('导出失败：', 'Export failed: ') + String(error), 'error', 7000); }
 }
 
 /* ------------------------------------------------------------- notification */
@@ -754,7 +801,7 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
       break;
     case 'reopenEncoding': {
       if (!state.file) {
-        notify('Open a file first', 'info');
+        notify(uiText('请先打开文件', 'Open a file first'), 'info');
         break;
       }
       if (!(await confirmSave())) return false;
@@ -768,7 +815,7 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
         state.encoding = res.encoding;
         editor.setValue(res.content);
         setDirty(false);
-        notify('Encoding: ' + res.encoding, 'success');
+        notify(uiText('编码：', 'Encoding: ') + res.encoding, 'success');
       }
       break;
     }
@@ -783,8 +830,10 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
     case 'revealInFileTree': showPanel('files'); break;
     case 'toggleSidebar': toggleSidebar(); break;
     case 'toggleOutline': showPanel('outline'); break;
-    case 'showFileList': fileListMode = true; showPanel('files'); await refreshFileTree(); break;
-    case 'showFileTree': fileListMode = false; showPanel('files'); await refreshFileTree(); break;
+    case 'showCurrentFiles': showPanel('files'); await refreshFileTree(); break;
+    case 'showFileList': fileListMode = true; void invoke('setting.put', 'sidebarFileList', true); showPanel('files'); await refreshFileTree(); break;
+    case 'showFileTree': fileListMode = false; void invoke('setting.put', 'sidebarFileList', false); showPanel('files'); await refreshFileTree(); break;
+    case 'searchFolder': showPanel('search'); break;
     case 'toggleSource': toggleSourceMode(); break;
     case 'toggleFocus': toggleFocusMode(); break;
     case 'toggleTypewriter': toggleTypewriterMode(); break;
@@ -815,7 +864,7 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
     case 'export:image': await exportFile('png'); break;
     case 'print': await exportFile('print'); break;
     case 'insertTable': {
-      const result = await formDialog('插入表格', [{ name: 'columns', label: '列数', type: 'number', min: 1, max: 30, value: '3' }, { name: 'rows', label: '行数', type: 'number', min: 1, max: 100, value: '3' }]);
+      const result = await formDialog(() => uiText('插入表格', 'Insert Table'), () => [{ name: 'columns', label: uiText('列数', 'Columns'), type: 'number', min: 1, max: 30, value: '3' }, { name: 'rows', label: uiText('行数', 'Rows'), type: 'number', min: 1, max: 100, value: '3' }]);
       if (result) {
         const columns = Math.min(30, Math.max(1, Number(result.columns) || 3)), rows = Math.min(100, Math.max(1, Number(result.rows) || 3));
         const row = '| ' + Array(columns).fill(' ').join(' | ') + ' |\n';
@@ -845,8 +894,8 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
     case 'superscript': wrapSelection(editor, '^', '^'); break;
     case 'subscript': wrapSelection(editor, '~', '~'); break;
     case 'comment': wrapSelection(editor, '<!-- ', ' -->'); break;
-    case 'link': wrapSelection(editor, '[', '](https://)', 'text'); break;
-    case 'image': wrapSelection(editor, '![', '](image.png)', 'alt'); break;
+    case 'link': wrapSelection(editor, '[', '](https://)', uiText('文本', 'text')); break;
+    case 'image': wrapSelection(editor, '![', '](image.png)', uiText('图片描述', 'alt')); break;
     case 'selectAll': {
       const active = document.activeElement;
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.select();
@@ -855,21 +904,60 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
     }
     case 'insertParagraphBefore': insertParagraph('before'); break;
     case 'insertParagraphAfter': insertParagraph('after'); break;
-    case 'undo': undo(editor.view); break;
-    case 'redo': redo(editor.view); break;
+    case 'undo': undo(editor.view); editor.focus(); break;
+    case 'redo': redo(editor.view); editor.focus(); break;
     default:
       if (action.startsWith('heading:')) toggleHeading(Number(action.split(':')[1]));
-      else throw new Error('未知操作：' + action);
+      else throw new Error(uiText('未知操作：', 'Unknown action: ') + action);
   }
   } catch (error) { notify(String(error instanceof Error ? error.message : error), 'error', 7000); return false; }
 }
 
 /* ------------------------------------------------------------ UI toggles */
 
-function toggleSidebar(): void {
-  state.sidebarVisible = !state.sidebarVisible;
+function updateChromeLanguage(): void {
+  document.documentElement.lang = state.lang === 'zh' ? 'zh-CN' : 'en';
+  for (const [selector, zh, en] of [
+    ['.outline-title', '大纲', 'Outline'],
+    ['#ty-quick-open-folder-category .ty-quick-open-category-title', '固定及最近位置', 'Pinned and Recent Locations'],
+    ['#ty-quick-open-recent-category .ty-quick-open-category-title', '最近文件', 'Recent Files'],
+    ['#ty-quick-open-infolder-category .ty-quick-open-category-title', '文件搜索结果', 'File Results'],
+  ]) document.querySelectorAll(selector).forEach(node => { node.textContent = uiText(zh, en); });
+  for (const [selector, zh, en] of [
+    ['#w-min', '最小化', 'Minimize'], ['#w-max', '最大化', 'Maximize'],
+    ['#w-pin, #w-unpin', '保持窗口在最前端', 'Always on Top'],
+    ['#w-restore', '还原窗口', 'Restore'], ['#w-close', '关闭', 'Close'],
+    ['#pin-outline-btn', '在侧边栏显示大纲', 'Show Outline in Sidebar'],
+  ]) document.querySelectorAll<HTMLElement>(selector).forEach(node => {
+    node.title = uiText(zh, en); node.setAttribute('aria-label', node.title);
+  });
+  for (const [selector, zh, en] of [
+    ['#toc-content, #outline-content', '大纲为空', 'Outline is Empty.'],
+    ['#file-library-tree', '尚未打开文件夹', 'No Folder is Opened.'],
+    ['#file-library-list-children', '没有可用文件', 'No Files Available'],
+  ]) document.querySelectorAll<HTMLElement>(selector).forEach(node => { node.dataset.afterContent = uiText(zh, en); });
+  $('#sidebar-tabs')?.setAttribute('aria-label', uiText('侧边栏', 'Sidebar'));
+  $('#ty-sidebar-footer')?.setAttribute('aria-label', uiText('文件操作', 'File Actions'));
+  const quick = $<HTMLInputElement>('#quick-open-input');
+  if (quick) { quick.placeholder = uiText('按文件名搜索', 'Search by file name'); quick.setAttribute('aria-label', quick.placeholder); }
+}
+
+function updateSidebarVisibility(): void {
   document.body.classList.toggle('sidebar-hidden', !state.sidebarVisible);
   document.body.classList.toggle('has-sidebar', state.sidebarVisible);
+  const sidebar = $('#aropyt-sidebar');
+  if (sidebar) {
+    sidebar.inert = !state.sidebarVisible;
+    sidebar.setAttribute('aria-hidden', String(!state.sidebarVisible));
+  }
+}
+
+function toggleSidebar(): void {
+  sidebarControls?.dismiss();
+  state.sidebarVisible = !state.sidebarVisible;
+  document.body.classList.add('sidebar-animated');
+  if (!state.sidebarVisible && $('#aropyt-sidebar')?.contains(document.activeElement)) editor.focus();
+  updateSidebarVisibility();
   updateFooterControls();
   void invoke('setting.put', 'sidebarVisible', state.sidebarVisible);
 }
@@ -877,6 +965,7 @@ function toggleSidebar(): void {
 function showPanel(panel: AppState['panel']): void {
   state.panel = panel;
   if (!state.sidebarVisible) toggleSidebar();
+  sidebarSearch?.update(panel);
   for (const tab of Array.from(document.querySelectorAll<HTMLElement>('.sidebar-tab'))) {
     tab.classList.toggle('active', tab.dataset.panel === panel);
   }
@@ -888,6 +977,8 @@ function showPanel(panel: AppState['panel']): void {
   }
   if (panel === 'outline') buildOutline();
   if (panel === 'files') void refreshFileTree();
+  sidebarControls?.update(panel, fileListMode);
+  if (panel === 'search') { $('#file-library-search-input')?.focus(); void runFolderSearch(); }
 }
 
 function toggleSourceMode(): void {
@@ -925,6 +1016,7 @@ function updateFooterControls(): void {
     source.classList.toggle('active', state.sourceMode);
     source.title = zh ? state.sourceMode ? '退出源代码模式' : '启用源代码模式' : state.sourceMode ? 'Exit Source Code Mode' : 'Enable Source Code Mode';
     source.setAttribute('aria-label', source.title); source.setAttribute('aria-pressed', String(state.sourceMode));
+    source.querySelector('.footer-source-label')!.textContent = zh ? '退出源代码模式' : 'Exit Source Code Mode';
   }
 }
 
@@ -932,15 +1024,39 @@ function updateFooterControls(): void {
 
 let searchHits: { from: number; to: number }[] = [];
 let searchIndex = -1;
+let searchExpression: RegExp | null = null;
+
+function updateSearchControls(): void {
+  const zh = state.lang === 'zh', mode = $('#search-panel-mode') as HTMLSelectElement;
+  mode.options[0].textContent = zh ? '查找' : 'Find'; mode.options[1].textContent = zh ? '查找和替换' : 'Find and Replace';
+  mode.setAttribute('aria-label', zh ? '查找模式' : 'Search mode');
+  const fields = [['search-panel-input', '查找', 'Find'], ['search-panel-replace-input', '替换为', 'Replace with']] as const;
+  for (const [id, cn, en] of fields) {
+    const input = $('#' + id) as HTMLInputElement; input.placeholder = zh ? cn : en; input.setAttribute('aria-label', input.placeholder);
+  }
+  for (const [id, cn, en] of [['searchpanel-case-option-btn', '区分大小写', 'Case Sensitive'], ['searchpanel-word-option-btn', '查找整个单词', 'Whole Word'],
+    ['searchpanel-regexp-option-btn', '正则表达式', 'Regular Expression'], ['search-panel-prev', '上一个匹配项', 'Previous match'],
+    ['search-panel-next', '下一个匹配项', 'Next match'], ['search-panel-close', '关闭查找', 'Close search']]) {
+    const button = $('#' + id)!; button.title = zh ? cn : en; button.setAttribute('aria-label', button.title);
+  }
+  $('#search-panel-replace-label')!.textContent = zh ? '替换为' : 'Replace';
+  $('#search-panel-replace-btn')!.textContent = zh ? '替换' : 'Replace';
+  $('#search-panel-replaceall-btn')!.textContent = zh ? '全部替换' : 'Replace All';
+  $('#md-searchpanel')!.setAttribute('aria-label', zh ? '查找和替换' : 'Find and Replace');
+}
 
 function openSearch(replace: boolean): void {
   const panel = $('#md-searchpanel');
   if (!panel) return;
+  const preserveQuery = panel.contains(document.activeElement);
+  updateSearchControls();
   panel.classList.remove('hide');
   panel.classList.toggle('searchpanel-replace-mode', replace);
+  document.body.classList.add('search-open'); document.body.classList.toggle('search-replace-open', replace);
+  ($('#search-panel-mode') as HTMLSelectElement).value = replace ? 'replace' : 'find';
   const input = $('#search-panel-input') as HTMLInputElement;
   const sel = editor.view.state.sliceDoc(editor.view.state.selection.main.from, editor.view.state.selection.main.to);
-  if (sel && !sel.includes('\n')) input.value = sel;
+  if (!preserveQuery && sel && !sel.includes('\n')) input.value = sel;
   input.focus();
   input.select();
   runSearch();
@@ -948,16 +1064,19 @@ function openSearch(replace: boolean): void {
 
 function closeSearch(): void {
   $('#md-searchpanel')?.classList.add('hide');
-  editor.focus();
+  document.body.classList.remove('search-open', 'search-replace-open');
+  editor.setSearchHighlights([], -1);
+  editor.focusSearchHit();
 }
 
-function runSearch(): void {
+function runSearch(select = true, nextFrom?: number): void {
   const input = $('#search-panel-input') as HTMLInputElement | null;
   const status = $('#search-panel-status');
   if (!input) return;
   const q = input.value;
   searchHits = [];
   searchIndex = -1;
+  searchExpression = null;
   if (q) {
     const caseSensitive = document.querySelector('#searchpanel-case-option-btn')?.classList.contains('active');
     const regex = document.querySelector('#searchpanel-regexp-option-btn')?.classList.contains('active');
@@ -967,32 +1086,56 @@ function runSearch(): void {
       const pattern = regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const wholeWord = document.querySelector('#searchpanel-word-option-btn')?.classList.contains('active');
       const re = new RegExp(wholeWord ? `(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])` : pattern, flags + 'u');
+      searchExpression = re;
       let m: RegExpExecArray | null;
       let guard = 0;
       while ((m = re.exec(text)) !== null && guard++ < 5000) {
         searchHits.push({ from: m.index, to: m.index + m[0].length });
-        if (m[0].length === 0) re.lastIndex++;
+        if (m[0].length === 0) re.lastIndex += text.codePointAt(re.lastIndex)! > 0xffff ? 2 : 1;
       }
     } catch {
-      if (status) status.textContent = 'invalid';
+      if (status) status.textContent = state.lang === 'zh' ? '表达式无效' : 'Invalid regex';
+      editor.setSearchHighlights([], -1);
       return;
     }
   }
-  if (status) status.textContent = q ? `${searchHits.length}` : '';
+  if (status) status.textContent = q ? `0 / ${searchHits.length}` : '';
   if (searchHits.length) {
-    searchIndex = 0;
-    selectHit(0);
-  }
+    const selection = editor.view.state.selection.main;
+    searchIndex = nextFrom === undefined && !select ? searchHits.findIndex(hit => hit.from === selection.from && hit.to === selection.to) : -1;
+    if (searchIndex < 0) searchIndex = Math.max(0, nextFrom === undefined && select ? 0 : searchHits.findIndex(hit => hit.from >= (nextFrom ?? selection.from)));
+    if (select) selectHit(searchIndex);
+    else { editor.setSearchHighlights(searchHits, searchIndex); if (status) status.textContent = `${searchIndex + 1} / ${searchHits.length}`; }
+  } else editor.setSearchHighlights([], -1);
 }
 
 function selectHit(i: number): void {
   const hit = searchHits[i];
   if (!hit) return;
-  editor.view.dispatch({ selection: { anchor: hit.from, head: hit.to }, scrollIntoView: true });
-  editor.focus();
+  const control = document.activeElement as HTMLElement | null;
+  const panel = $('#md-searchpanel'), keepFocus = panel?.contains(control);
+  if (panel?.classList.contains('hide')) {
+    editor.setSearchHighlights([], -1);
+    editor.view.dispatch({ selection: { anchor: hit.from, head: hit.to }, scrollIntoView: true });
+  } else editor.setSearchHighlights(searchHits, i, true);
+  $('#search-panel-status')!.textContent = `${i + 1} / ${searchHits.length}`;
+  if (keepFocus) control?.focus({ preventScroll: true }); else editor.focusSearchHit();
 }
 
 function findStep(dir: 1 | -1): void {
+  if ($('#md-searchpanel')?.classList.contains('hide')) {
+    const selection = editor.view.state.selection.main;
+    runSearch(false);
+    if (!searchHits.length) return;
+    const current = searchHits.findIndex(hit => hit.from === selection.from && hit.to === selection.to);
+    if (current >= 0) searchIndex = (current + dir + searchHits.length) % searchHits.length;
+    else if (dir === 1) searchIndex = Math.max(0, searchHits.findIndex(hit => hit.from >= selection.to));
+    else {
+      searchIndex = searchHits.length - 1;
+      for (let index = 0; index < searchHits.length; index++) if (searchHits[index].to <= selection.from) searchIndex = index;
+    }
+    selectHit(searchIndex); return;
+  }
   if (!searchHits.length) return;
   searchIndex = (searchIndex + dir + searchHits.length) % searchHits.length;
   selectHit(searchIndex);
@@ -1002,18 +1145,42 @@ function replaceCurrent(): void {
   const hit = searchHits[searchIndex];
   if (!hit) return;
   const input = $('#search-panel-replace-input') as HTMLInputElement;
-  editor.view.dispatch({ changes: { from: hit.from, to: hit.to, insert: input.value } });
-  runSearch();
+  const insert = searchReplacement(hit, input.value), caret = hit.from + insert.length;
+  const next = caret + (hit.from === hit.to ? editor.value.codePointAt(hit.to)! > 0xffff ? 2 : 1 : 0);
+  editor.view.dispatch({ changes: { from: hit.from, to: hit.to, insert }, selection: { anchor: caret } });
+  runSearch(true, next);
   refreshAllBlocks();
 }
 
 function replaceAll(): void {
   const input = $('#search-panel-replace-input') as HTMLInputElement;
   if (!searchHits.length) return;
-  const changes = [...searchHits].reverse().map((h) => ({ from: h.from, to: h.to, insert: input.value }));
+  const text = editor.value;
+  const changes = searchHits.map((h) => ({ from: h.from, to: h.to, insert: searchReplacement(h, input.value, text) }));
   editor.view.dispatch({ changes });
   runSearch();
   refreshAllBlocks();
+}
+
+function searchReplacement(hit: { from: number; to: number }, replacement: string, text = editor.value): string {
+  if (!searchExpression || !$('#searchpanel-regexp-option-btn')?.classList.contains('active')) return replacement;
+  // Read captures from the full document. WebKit's native sticky replace path
+  // can ignore lastIndex; expanding the tokens from exec avoids that path.
+  const expression = new RegExp(searchExpression.source, searchExpression.flags.replace('g', '') + 'y');
+  expression.lastIndex = hit.from;
+  const match = expression.exec(text);
+  if (!match || match.index !== hit.from) return text.slice(hit.from, hit.to);
+  return replacement.replace(/\$(\$|&|`|'|<([^>]+)>|(\d{1,2}))/g, (token, key: string, name: string | undefined, digits: string | undefined) => {
+    if (key === '$') return '$';
+    if (key === '&') return match[0];
+    if (key === '`') return text.slice(0, hit.from);
+    if (key === "'") return text.slice(hit.to);
+    if (name !== undefined) return match.groups ? match.groups[name] ?? '' : token;
+    const index = Number(digits);
+    if (index > 0 && index < match.length) return match[index] ?? '';
+    const first = Number(digits?.[0]);
+    return digits?.length === 2 && first > 0 && first < match.length ? (match[first] ?? '') + digits[1] : token;
+  });
 }
 
 /* ------------------------------------------------------------- quick open */
@@ -1072,12 +1239,23 @@ async function runFolderSearch(): Promise<void> {
   const input = $('#file-library-search-input') as HTMLInputElement | null;
   const host = $('#file-library-search-result');
   if (!input || !host) return;
-  const q = input.value.trim();
-  if (!q || !state.folder) {
+  const revision = ++folderSearchRevision, q = input.value;
+  const folder = state.folder || state.file?.replace(/[\\/][^\\/]+$/, '');
+  host.setAttribute('aria-busy', 'false');
+  if (!q || !folder) {
     host.innerHTML = '';
     return;
   }
-  const hits = await invoke<{ file: string; line: number; text: string }[]>('search.findAll', state.folder, q, {});
+  host.setAttribute('aria-busy', 'true');
+  let hits: { file: string; line: number; text: string }[];
+  try {
+    hits = await invoke('search.findAll', folder, q, sidebarSearch?.filters || {});
+  } catch (error) {
+    if (revision === folderSearchRevision) { host.textContent = String(error); host.setAttribute('aria-busy', 'false'); }
+    return;
+  }
+  if (revision !== folderSearchRevision || folder !== (state.folder || state.file?.replace(/[\\/][^\\/]+$/, ''))) return;
+  host.setAttribute('aria-busy', 'false');
   const byFile = new Map<string, { line: number; text: string }[]>();
   for (const h of hits) {
     const list = byFile.get(h.file) ?? [];
@@ -1132,8 +1310,19 @@ function comboOf(e: KeyboardEvent): string {
 function installKeymap(): void {
   window.addEventListener('keydown', (e) => {
     if (e.defaultPrevented) return;
-    if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
     const combo = comboOf(e);
+    const field = (e.target as HTMLElement)?.closest('input, textarea, select');
+    if (field) {
+      const primary = /Mac/i.test(navigator.platform) ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+      if (!primary || e.isComposing) return;
+      if (combo.toLowerCase() === 'ctrl+a' && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+        e.preventDefault(); field.select();
+      } else if (field.closest('#md-searchpanel, #sidebar-search-reveal')) {
+        const action = ({ 'ctrl+z': 'undo', 'ctrl+shift+z': 'redo', 'ctrl+y': 'redo' } as Record<string, string>)[combo.toLowerCase()];
+        if (action) { e.preventDefault(); void runAction(action); }
+      }
+      return;
+    }
     const custom = Object.entries(settings.keyBinding || {}).find(([, binding]) =>
       String(binding).replace(/CommandOrControl|CmdOrCtrl|Command|Cmd|Meta/gi, 'Ctrl').toLowerCase() === combo.toLowerCase());
     const direct = custom ? [String(custom[1]), custom[0]] : KEY_ACTIONS.find(([k]) => k.toLowerCase() === combo.toLowerCase());
@@ -1147,6 +1336,11 @@ function installKeymap(): void {
 /* ------------------------------------------------------------------ boot */
 
 async function boot(): Promise<void> {
+  // Subscribe before the first asynchronous load or component subscriber.
+  // Native menu/settings events arriving during startup belong to the app.
+  const startupEvents: { type: string; arg?: any }[] = [];
+  let receiveEvent: ((event: { type: string; arg?: any }) => void) | undefined;
+  bridge.on(event => { if (receiveEvent) receiveEvent(event); else startupEvents.push(event); });
   document.body.classList.add('native-window');
   if (/Mac/i.test(navigator.platform)) {
     document.body.classList.remove('on-windows');
@@ -1160,6 +1354,8 @@ async function boot(): Promise<void> {
     state.lang = 'en';
   }
 
+  setUiLanguage(state.lang);
+  updateChromeLanguage();
   setBlockRenderer(blockRanges);
   setSingleBlockRenderer(renderBlockHtml);
   setDialect(dialectFromSettings(settings));
@@ -1191,6 +1387,7 @@ async function boot(): Promise<void> {
       setDirty(true);
       scheduleDraft();
       scheduleDerivedUpdate();
+      queueMicrotask(() => { if (!$('#md-searchpanel')?.classList.contains('hide')) runSearch(false); });
     },
   });
 
@@ -1212,20 +1409,38 @@ async function boot(): Promise<void> {
   if (launchFolder && await invoke('fs.isDir', launchFolder)) {
     state.folder = String(launchFolder);
   }
+  fileListMode = settings.sidebarFileList !== false;
   await refreshFileTree();
   buildOutline();
   updateStatusBar();
   // The sidebar starts hidden; showPanel() would force it open, so set up the
   // panel contents directly and leave visibility alone.
   state.sidebarVisible = settings.sidebarVisible === true;
-  state.panel = 'outline';
-  document.body.classList.toggle('sidebar-hidden', !state.sidebarVisible);
-  document.body.classList.toggle('has-sidebar', state.sidebarVisible);
+  state.panel = 'files';
+  updateSidebarVisibility();
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('.sidebar-content-content'))) {
-    el.style.display = el.id === 'outline-content' ? '' : 'none';
+    el.style.display = el.id === 'file-library' ? '' : 'none';
+    el.classList.toggle('active', el.id === 'file-library');
   }
 
   installKeymap();
+  sidebarControls = new SidebarControls({
+    lang: () => state.lang,
+    root: () => state.folder || state.file?.replace(/[\\/][^\\/]+$/, '') || null,
+    run: runAction, refresh: refreshFileTree, sort: fileSort,
+    setSort: async (by, descending) => {
+      settings.sidebarSort = by; settings.sidebarSortDescending = descending;
+      await invoke('setting.put', 'sidebarSort', by); await invoke('setting.put', 'sidebarSortDescending', descending); await refreshFileTree();
+    },
+    create: async path => {
+      if (!(await confirmSave(true))) return false;
+      await invoke('fs.createFile', path); await openFile(path, true); editor.focus(); return true;
+    },
+    notify: message => notify(message, 'error'),
+  });
+  sidebarControls.update(state.panel, fileListMode);
+  sidebarSearch = new SidebarSearch({ lang: () => state.lang, panel: () => state.panel, show: showPanel, search: runFolderSearch });
+  sidebarSearch.update(state.panel);
   wireUi();
   updateFooterControls();
   scheduleAutoSave();
@@ -1234,7 +1449,7 @@ async function boot(): Promise<void> {
   state.zoom = Math.min(3, Math.max(0.4, Number(settings.zoomLevel) || 1));
   document.body.style.zoom = String(state.zoom);
 
-  bridge.on((event) => {
+  receiveEvent = (event) => {
     if (event.type === 'menu') { editor.syncNativeSelection(); void runAction(event.arg.action, event.arg.arg); }
     else if (event.type === 'open-file') void openFile(event.arg);
     else if (event.type === 'reapply-theme') void reapplyThemeFromSettings();
@@ -1249,7 +1464,8 @@ async function boot(): Promise<void> {
     else if (event.type === 'request-close') {
       void confirmSave().then(async (close) => { if (close) await invoke('app.onCloseWin'); });
     }
-  });
+  };
+  for (const event of startupEvents) receiveEvent(event);
 
   (window as any).__aropyt = { renderBlockHtml, footnoteDefinitions, state, runAction, blockRanges, prepareExport, confirmSave, getEditor: () => editor };
 
@@ -1307,8 +1523,16 @@ async function onSettingChanged(change: { key: string; value: unknown }): Promis
   if (change.key === 'menuLanguage') {
     const info = await invoke<{ lang: 'zh' | 'en' }>('menu.dump');
     state.lang = info?.lang === 'zh' ? 'zh' : 'en';
+    setUiLanguage(state.lang);
+    updateChromeLanguage();
+    editor.refreshUiLanguage();
+    buildOutline();
+    window.dispatchEvent(new Event('aropyt-language-changed'));
     statistics?.update();
-    spellcheck?.update(); updateFooterControls();
+    spellcheck?.update(); updateFooterControls(); sidebarSearch?.update(state.panel);
+    updateSearchControls();
+    if (!$('#md-searchpanel')?.classList.contains('hide')) runSearch(false);
+    if (state.panel === 'search') void runFolderSearch();
     updateTitle();
     void refreshFileTree();
   }
@@ -1349,7 +1573,7 @@ function wireUi(): void {
     const yaml = /^---\s*\n([\s\S]*?)\n---/.exec(editor.value)?.[1] || '';
     const upload = settings.autoUploadByYaml && /^typora-copy-images-to:\s*['"]?upload['"]?\s*$/m.test(yaml);
     const sources = await invoke<string[]>('images.prepare', paths, state.file, !!upload);
-    replaceSelection(editor, sources.map((source) => `![image](${source})`).join('\n')); editor.focus();
+    replaceSelection(editor, sources.map((source) => `![${uiText('图片', 'image')}](${source})`).join('\n')); editor.focus();
   };
   editor.view.dom.addEventListener('paste', (event) => {
     const images = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith('image/'));
@@ -1395,7 +1619,6 @@ function wireUi(): void {
   for (const tab of Array.from(document.querySelectorAll<HTMLElement>('.sidebar-tab'))) {
     tab.addEventListener('click', () => showPanel(tab.dataset.panel as AppState['panel']));
   }
-  $('#sidebar-search-btn')?.addEventListener('click', () => showPanel('search'));
   for (const button of document.querySelectorAll<HTMLButtonElement>('#ty-footer button')) {
     button.addEventListener('mousedown', (event) => event.preventDefault());
     button.addEventListener('keydown', (event) => {
@@ -1406,24 +1629,13 @@ function wireUi(): void {
   $('#toggle-sourceview-btn')?.addEventListener('click', toggleSourceMode);
   $('#footer-word-count')?.addEventListener('click', () => spellcheck?.dismiss());
   $('#footer-spell-check')?.addEventListener('click', () => statistics?.dismiss());
-  $('#sidebar-new-file-btn')?.addEventListener('click', () => {
-    if (!state.folder) return void runAction('openFolder');
-    void invoke('export.saveFile', {
-      defaultPath: state.folder + '/Untitled.md',
-      filters: [{ name: 'Markdown', extensions: ['md'] }],
-      content: '# Untitled\n',
-    }).then((p: string | null) => {
-      if (p) {
-        void refreshFileTree();
-        void openFile(p);
-      }
-    });
-  });
-  $('#sidebar-menu-btn')?.addEventListener('click', () => void runAction('openFolder'));
   $('#switch-file-list-btn')?.addEventListener('click', () => void runAction(fileListMode ? 'showFileTree' : 'showFileList'));
   $('#aropyt-sidebar-resizer')?.addEventListener('mousedown', startSidebarResize);
 
   const searchInput = $('#search-panel-input') as HTMLInputElement | null;
+  updateSearchControls();
+  $('#search-panel-mode')?.addEventListener('change', event => openSearch((event.target as HTMLSelectElement).value === 'replace'));
+  $('#md-searchpanel')?.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeSearch(); } });
   searchInput?.addEventListener('input', () => {
     runSearch();
   });
@@ -1438,15 +1650,14 @@ function wireUi(): void {
   $('#search-panel-close')?.addEventListener('click', closeSearch);
   $('#search-panel-replace-btn')?.addEventListener('click', replaceCurrent);
   $('#search-panel-replaceall-btn')?.addEventListener('click', replaceAll);
+  $('#search-panel-replace-input')?.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); replaceCurrent(); } });
   for (const id of ['searchpanel-case-option-btn', 'searchpanel-regexp-option-btn', 'searchpanel-word-option-btn']) {
     document.getElementById(id)?.addEventListener('click', (e) => {
-      (e.currentTarget as HTMLElement).classList.toggle('active');
+      const button = e.currentTarget as HTMLElement;
+      button.classList.toggle('active'); button.setAttribute('aria-pressed', String(button.classList.contains('active')));
       runSearch();
     });
   }
-
-  const folderSearch = $('#file-library-search-input') as HTMLInputElement | null;
-  folderSearch?.addEventListener('input', () => void runFolderSearch());
 
   const qi = $('#quick-open-input') as HTMLInputElement | null;
   qi?.addEventListener('input', renderQuick);
@@ -1487,11 +1698,13 @@ function startSidebarResize(e: MouseEvent): void {
   if (!sidebar) return;
   const startX = e.clientX;
   const startW = sidebar.getBoundingClientRect().width;
+  document.body.classList.add('sidebar-resizing');
   const onMove = (ev: MouseEvent) => {
     const w = Math.max(120, Math.min(640, startW + ev.clientX - startX));
     document.documentElement.style.setProperty('--sidebar-width', w + 'px');
   };
   const onUp = () => {
+    document.body.classList.remove('sidebar-resizing');
     window.removeEventListener('mousemove', onMove);
     window.removeEventListener('mouseup', onUp);
   };

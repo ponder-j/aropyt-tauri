@@ -1,3 +1,4 @@
+use crate::i18n::text as tr;
 use crate::{dialogs, files::*, native, state::*};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
@@ -10,7 +11,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_opener::OpenerExt;
 pub fn bytes(source: &str) -> Result<Vec<u8>> {
     if source.starts_with("data:") {
-        let (head, body) = source.split_once(',').ok_or("图片数据无效")?;
+        let (head, body) = source.split_once(',').ok_or(tr("图片数据无效", "Invalid image data"))?;
         return if head.contains(";base64") {
             B64.decode(body).map_err(err)
         } else {
@@ -84,7 +85,7 @@ pub fn reference(st: &AppState, target: &Path, doc: Option<&str>, escape: bool) 
 }
 fn name(source: &str) -> String {
     if source.starts_with("data:") {
-        return "image.png".into();
+        return tr("图片.png", "image.png").into();
     }
     if let Ok(url) = url::Url::parse(source) {
         if url.scheme() == "http" || url.scheme() == "https" {
@@ -95,13 +96,13 @@ fn name(source: &str) -> String {
                         .decode_utf8_lossy()
                         .into_owned()
                 })
-                .unwrap_or("image.png".into());
+                .unwrap_or(tr("图片.png", "image.png").into());
         }
     }
     local_path(source)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or("image.png".into())
+        .unwrap_or(tr("图片.png", "image.png").into())
 }
 fn unique(target: PathBuf, input: Option<&Path>) -> PathBuf {
     if target.exists() && input != Some(target.as_path()) {
@@ -135,10 +136,10 @@ fn upload_files(st: &AppState, files: &[String]) -> Result<Vec<String>> {
             .json::<Value>()
             .map_err(err)?;
         if response["success"] == false || !response["result"].is_array() {
-            return Err(response["message"]
-                .as_str()
-                .unwrap_or("图床程序未返回图片地址")
-                .into());
+            return Err(format!("{}{}", tr("图片上传失败。", "Image upload failed."), response["message"]
+                .as_str().filter(|message| !message.is_empty())
+                .map(|message| format!("\n{message}"))
+                .unwrap_or_else(|| format!("\n{}", tr("图床程序未返回图片地址", "The image uploader did not return an image URL")))));
         }
         return Ok(response["result"]
             .as_array()
@@ -154,9 +155,9 @@ fn upload_files(st: &AppState, files: &[String]) -> Result<Vec<String>> {
         } else {
             ""
         });
-    let parts = shlex::split(command).ok_or("上传命令无效")?;
+    let parts = shlex::split(command).ok_or(tr("上传命令无效", "Invalid upload command"))?;
     if parts.is_empty() {
-        return Err("请在偏好设置 → 图像中选择图床并配置上传命令。".into());
+        return Err(tr("请在偏好设置 → 图像中选择图床并配置上传命令。", "Select an image uploader and configure its upload command in Preferences → Images.").into());
     }
     let output = crate::conversion::execute(
         &parts[0],
@@ -173,7 +174,7 @@ fn upload_files(st: &AppState, files: &[String]) -> Result<Vec<String>> {
         .map(|m| m.as_str().to_string())
         .collect();
     if urls.len() < files.len() {
-        return Err("上传命令没有为每张图片返回地址。".into());
+        return Err(tr("上传命令没有为每张图片返回地址。", "The upload command did not return a URL for every image.").into());
     }
     Ok(urls[urls.len() - files.len()..].to_vec())
 }
@@ -198,7 +199,7 @@ fn upload(st: &AppState, sources: &[String]) -> Result<Vec<String>> {
             .iter()
             .any(|u| !(u.starts_with("https://") || u.starts_with("http://")))
     {
-        return Err("图床返回的图片地址不完整".into());
+        return Err(tr("图床返回的图片地址不完整", "The image uploader returned incomplete image URLs").into());
     }
     Ok(urls)
 }
@@ -225,9 +226,9 @@ pub fn handle(app: &AppHandle, win: &WebviewWindow, method: &str, args: &[Value]
     let s = st.config();
     let source = || args.first().and_then(Value::as_str).unwrap_or("");
     match method{
-        "images.pickLocal"=>Ok(dialogs::open(app,win,&json!({"properties":["openFile","multiSelections"],"filters":[{"name":"Images","extensions":["png","jpg","jpeg","gif","svg","webp","bmp","tiff"]}]}))["filePaths"].clone()),
+        "images.pickLocal"=>Ok(dialogs::open(app,win,&json!({"properties":["openFile","multiSelections"],"filters":[{"name":tr("图片", "Images"),"extensions":["png","jpg","jpeg","gif","svg","webp","bmp","tiff"]}]}))["filePaths"].clone()),
         "images.saveClipboard"=>{let image=native::clipboard(|clipboard|clipboard.get_image().map(|image|(image.width,image.height,image.bytes.into_owned())).map_err(err));let Ok((width,height,bytes))=image else{return Ok(Value::Null)};let p=st.data.join("pasted-images").join(format!("{}.png",uuid::Uuid::new_v4()));fs::create_dir_all(p.parent().unwrap()).map_err(err)?;image::save_buffer_with_format(&p,&bytes,width as u32,height as u32,image::ColorType::Rgba8,image::ImageFormat::Png).map_err(err)?;Ok(json!(p))},
-        "images.prepare"=>{let sources:Vec<String>=args[0].as_array().ok_or("图片列表无效")?.iter().filter_map(|v|v.as_str().map(String::from)).collect();let doc=args.get(1).and_then(Value::as_str);let force=args.get(2)==Some(&json!(true));let action=if force{"upload"}else{s["actionWhenInsertImage"].as_str().unwrap_or("none")};
+        "images.prepare"=>{let sources:Vec<String>=args[0].as_array().ok_or(tr("图片列表无效", "Invalid image list"))?.iter().filter_map(|v|v.as_str().map(String::from)).collect();let doc=args.get(1).and_then(Value::as_str);let force=args.get(2)==Some(&json!(true));let action=if force{"upload"}else{s["actionWhenInsertImage"].as_str().unwrap_or("none")};
             let eligible:Vec<String>=if action=="upload"{sources.iter().filter(|v|force||if v.starts_with("http:")||v.starts_with("https:")||v.starts_with("data:"){s["applyRulesToOnline"]==true}else{s["applyRulesToLocal"]!=false}).cloned().collect()}else{vec![]};let urls=if eligible.is_empty(){vec![]}else{upload(&st,&eligible)?};let mut result=vec![];
             for input in sources{if let Some(n)=eligible.iter().position(|v|v==&input){result.push(urls[n].clone());continue;}let local=!(input.starts_with("http:")||input.starts_with("https:")||input.starts_with("data:"));let mut target=if local{local_path(&input).to_string_lossy().into_owned()}else{input.clone()};
                 if doc.is_some()&&action!="none"&&action!="upload"&&if local{s["applyRulesToLocal"]!=false}else{s["applyRulesToOnline"]==true}{let dir=directory(&s,doc).unwrap_or_else(||Path::new(doc.unwrap()).parent().unwrap().into());fs::create_dir_all(&dir).map_err(err)?;let p=unique(dir.join(name(&input)),if local{Some(Path::new(&target))}else{None});if !local||p!=local_path(&input){fs::write(&p,bytes(&input)?).map_err(err)?;}target=p.to_string_lossy().into_owned();}
@@ -237,14 +238,14 @@ pub fn handle(app: &AppHandle, win: &WebviewWindow, method: &str, args: &[Value]
         "images.open"=>{app.opener().open_path(local_path(source()).to_string_lossy(),None::<&str>).map_err(err)?;Ok(json!(true))},
         "images.reveal"=>{app.opener().reveal_item_in_dir(local_path(source())).map_err(err)?;Ok(json!(true))},
         "images.target"=>{let doc=args.get(1).and_then(Value::as_str);let dir=directory(&s,doc);Ok(dir.filter(|d|local_path(source()).parent()!=Some(d.as_path())).map(|d|json!(d.file_name().unwrap().to_string_lossy())).unwrap_or(Value::Null))},
-        "images.transfer"=>{let mode=args[1].as_str().unwrap_or("");if !["copy","move","copy-target","move-target"].contains(&mode){return Err("无效的图片操作".into());}let moving=mode.starts_with("move");let local=source().starts_with("file:")||source().starts_with("asset:")||Path::new(source()).is_absolute();if moving&&!local{return Err("只能移动本地图片".into());}let doc=args.get(2).and_then(Value::as_str);
-            let target=if mode.ends_with("-target"){let dir=directory(&s,doc).ok_or("请先设置图片存储目录")?;fs::create_dir_all(&dir).map_err(err)?;{let input=local_path(source());unique(dir.join(name(source())),if local{Some(input.as_path())}else{None})}}else{let picked=dialogs::save(app,win,&json!({"defaultPath":if local{local_path(source()).to_string_lossy().into_owned()}else{name(source())}}));if picked["canceled"]==true{return Ok(Value::Null);}local_path(picked["filePath"].as_str().unwrap())};
+        "images.transfer"=>{let mode=args[1].as_str().unwrap_or("");if !["copy","move","copy-target","move-target"].contains(&mode){return Err(tr("无效的图片操作", "Invalid image operation").into());}let moving=mode.starts_with("move");let local=source().starts_with("file:")||source().starts_with("asset:")||Path::new(source()).is_absolute();if moving&&!local{return Err(tr("只能移动本地图片", "Only local images can be moved").into());}let doc=args.get(2).and_then(Value::as_str);
+            let target=if mode.ends_with("-target"){let dir=directory(&s,doc).ok_or(tr("请先设置图片存储目录", "Set an image storage folder first"))?;fs::create_dir_all(&dir).map_err(err)?;{let input=local_path(source());unique(dir.join(name(source())),if local{Some(input.as_path())}else{None})}}else{let picked=dialogs::save(app,win,&json!({"defaultPath":if local{local_path(source()).to_string_lossy().into_owned()}else{name(source())}}));if picked["canceled"]==true{return Ok(Value::Null);}local_path(picked["filePath"].as_str().unwrap())};
             if !local||target!=local_path(source()){atomic_write(&target,&bytes(source())?)?;if moving{fs::remove_file(local_path(source())).map_err(err)?;}}Ok(json!(reference(&st,&target,doc,true)))},
-        "images.trash"=>{let answer=dialogs::message(app,win,&json!({"type":"warning","message":"将图片文件移到废纸篓？","detail":source(),"buttons":["移到废纸篓","取消"],"cancelId":1}));if answer["response"]!=0{return Ok(json!(false));}trash::delete(local_path(source())).map_err(err)?;Ok(json!(true))},
-        "media.output"=>{let media=&args[0];let action=args[1].as_str().unwrap_or("");let svg=media["svg"].as_str().filter(|s|s.starts_with("<svg")).ok_or("媒体数据无效")?;if !["copy","save"].contains(&action){return Err("无效的媒体操作".into());}let target=if action=="save"{let pick=dialogs::save(app,win,&json!({"defaultPath":"diagram.svg","filters":[{"name":"SVG","extensions":["svg"]},{"name":"PNG","extensions":["png"]}]}));if pick["canceled"]==true{return Ok(json!(false));}Some(local_path(pick["filePath"].as_str().unwrap()))}else{None};if let Some(p)=&target{if p.extension().is_some_and(|e|e=="svg"){atomic_write(p,svg.as_bytes())?;return Ok(json!(true));}}
+        "images.trash"=>{let answer=dialogs::message(app,win,&json!({"type":"warning","message":tr("将图片文件移到废纸篓？", "Move the image file to Trash?"),"detail":source(),"buttons":[tr("移到废纸篓", "Move to Trash"),tr("取消", "Cancel")],"cancelId":1}));if answer["response"]!=0{return Ok(json!(false));}trash::delete(local_path(source())).map_err(err)?;Ok(json!(true))},
+        "media.output"=>{let media=&args[0];let action=args[1].as_str().unwrap_or("");let svg=media["svg"].as_str().filter(|s|s.starts_with("<svg")).ok_or(tr("媒体数据无效", "Invalid media data"))?;if !["copy","save"].contains(&action){return Err(tr("无效的媒体操作", "Invalid media operation").into());}let target=if action=="save"{let pick=dialogs::save(app,win,&json!({"defaultPath":tr("图表.svg", "diagram.svg"),"filters":[{"name":"SVG","extensions":["svg"]},{"name":"PNG","extensions":["png"]}]}));if pick["canceled"]==true{return Ok(json!(false));}Some(local_path(pick["filePath"].as_str().unwrap()))}else{None};if let Some(p)=&target{if p.extension().is_some_and(|e|e=="svg"){atomic_write(p,svg.as_bytes())?;return Ok(json!(true));}}
             let png=native::render(&format!("<html><body style='margin:0;background:white'>{svg}</body></html>"),"png",media["width"].as_f64().unwrap_or(1000.).clamp(1.,8192.),media["height"].as_f64().unwrap_or(800.).clamp(1.,8192.),&s)?;
             if let Some(p)=target{atomic_write(&p,&png)?;}else{write_clipboard_image(&png,&s)?;}Ok(json!(true))},
         "images.testUploader"=>{let temp=tempfile::tempdir_in(&st.data).map_err(err)?;let p=temp.path().join("test.png");fs::write(&p,B64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==").unwrap()).map_err(err)?;Ok(json!({"ok":true,"urls":upload_files(&st,&[p.to_string_lossy().into_owned()])?}))},
-        _=>Err(format!("未知图片操作：{method}"))
+        _=>Err(format!("{}{method}", tr("未知图片操作：", "Unknown image operation: ")))
     }
 }

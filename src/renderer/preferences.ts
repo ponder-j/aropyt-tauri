@@ -4,7 +4,10 @@
  * the control and write the value back through the setting.put channel.
  */
 
-import { SPELL_LANGUAGES } from '../shared/spellcheck';
+import { SPELL_LANGUAGES, spellLanguageName } from '../shared/spellcheck';
+import { resolveLang } from '../main/menu-model';
+import { getUiLanguage, setUiLanguage } from '../shared/ui-language';
+import { preferenceText as t } from './preferences-i18n';
 
 declare global {
   interface Window {
@@ -29,7 +32,7 @@ type Row =
   | { kind: 'select'; key: string; label: string; options: [string, string][]; wide?: boolean }
   | { kind: 'number'; key: string; label: string; min?: number; max?: number; step?: number; suffix?: string; presets?: [number, string][] }
   | { kind: 'text'; key: string; label: string; placeholder?: string }
-  | { kind: 'button'; label: string; button: string; action: () => void }
+  | { kind: 'button'; label: string; button: string; pending?: string; action: () => unknown }
   | { kind: 'note'; text: string }
   | { kind: 'hint'; text: string };
 
@@ -40,13 +43,14 @@ let settings: Record<string, any> = {};
 let themes: string[] = [];
 let panes: Pane[] = [];
 let currentPane = 'files';
+let languageReadRevision = 0;
 
 const themeOptions = (): [string, string][] =>
   (themes.length ? themes : ['github', 'night', 'newsprint', 'pixyll', 'whitey']).map((t) => [t, t]);
 
 const L10N: [string, string][] = [
   ['auto', 'System Language'],
-  ['zh', '简体中文'],
+  ['zh', 'Simplified Chinese'],
   ['en', 'English'],
 ];
 
@@ -88,7 +92,7 @@ function buildPanes(): Pane[] {
         { title: 'Recent Locations', rows: [
           { kind: 'check', key: 'recordRecent', label: 'Record recent files and folders' },
           { kind: 'button', label: '', button: 'Clear Recent Folders and Files',
-            action: () => void invoke('setting.clearRecentDocuments') },
+            action: () => invoke('setting.clearRecentDocuments') },
         ] },
         { title: 'When drop file / folder into Aropyt', rows: [
           { kind: 'select', key: 'actionWhenDropFolder', label: 'When drop folder', options: [
@@ -107,12 +111,12 @@ function buildPanes(): Pane[] {
       build: () => [
         { title: '', rows: [{ kind: 'note', text: '(Some options will be applied after restart.)' }] },
         { title: 'Spell Check', searchTerms: '拼写检查 自动检测 语言 词典', rows: [
-          { kind: 'note', text: '拼写词典默认不安装。可按语言下载，或导入本地 Hunspell .aff / .dic 文件。文稿内容不会上传。' },
-          { kind: 'button', label: '离线拼写词典', button: '下载所选语言词典', action: async () => { notifyUser('正在下载词典，请稍候…'); const result = await invoke('dictionary.installSelected'); notifyUser(result?.error || '词典已安装，可选择语言开启拼写检查。'); } },
-          { kind: 'button', label: '本地词典', button: '导入 .aff / .dic', action: async () => { const result = await invoke('dictionary.importSelected'); if (result) notifyUser(result?.error || '词典已导入。'); } },
-          { kind: 'button', label: '管理词典', button: '打开词典文件夹', action: () => void invoke('dictionary.openFolder') },
+          { kind: 'note', text: 'Spelling dictionaries are not installed by default. Download a dictionary for the selected language or import local Hunspell .aff / .dic files. Document content is never uploaded.' },
+          { kind: 'button', label: 'Offline spelling dictionaries', button: 'Download selected dictionary', pending: 'Downloading dictionary, please wait…', action: async () => { const result = await invoke('dictionary.installSelected'); if (result?.error) throw new Error(result.error); await notifyUser(t('Dictionary installed. Select a language to enable spell checking.')); } },
+          { kind: 'button', label: 'Local dictionary', button: 'Import .aff / .dic', action: async () => { const result = await invoke('dictionary.importSelected'); if (result?.error) throw new Error(result.error); if (result) await notifyUser(t('Dictionary imported.')); } },
+          { kind: 'button', label: 'Manage dictionaries', button: 'Open dictionary folder', action: () => invoke('dictionary.openFolder') },
           { kind: 'select', key: 'presetSpellCheck', label: 'Default spell check language', options: [
-            ['auto', 'Auto Detect Language'], ['off', 'Disable Spell Check'], ...SPELL_LANGUAGES.map(([code, name]): [string, string] => [code, name]) ] },
+            ['auto', 'Auto Detect Language'], ['off', 'Disable Spell Check'], ...SPELL_LANGUAGES.map(([code]): [string, string] => [code, spellLanguageName(code, getUiLanguage())]) ] },
           { kind: 'check', key: 'spellcheckForCodeAndLink', label: 'Check spelling in code and links' },
         ] },
         { title: 'Indent Size on Save', rows: [
@@ -130,7 +134,7 @@ function buildPanes(): Pane[] {
             label: 'Display source for simple blocks (including headings, etc.) on focus' },
         ] },
         { title: 'Default Copy Behavior', rows: [
-          { kind: 'hint', text: '(ctrl+c)' },
+          { kind: 'hint', text: /Mac/i.test(navigator.platform) ? '(⌘C)' : '(Ctrl+C)' },
           { kind: 'check', key: 'copyMarkdownAsPlain', label: 'Copy Markdown source as plain text' },
           { kind: 'check', key: 'lineWiseCopyCut',
             label: 'Copy or cut the whole lines that have cursors on them, if there is no selection when doing' },
@@ -144,7 +148,7 @@ function buildPanes(): Pane[] {
           { kind: 'check', key: 'typewriterKeepCaret',
             label: 'Always keep caret in middle of screen when typewriter mode is enabled' },
           { kind: 'button', label: '', button: 'Turn off Typewriter / Focus Mode',
-            action: () => { void invoke('prefs.setMode', 'typewriter', false); void invoke('prefs.setMode', 'focus', false); } },
+            action: () => Promise.all([invoke('prefs.setMode', 'typewriter', false), invoke('prefs.setMode', 'focus', false)]) },
         ] },
       ],
     },
@@ -176,8 +180,8 @@ function buildPanes(): Pane[] {
             ['none', 'None'], ['ipic', 'iPic'], ['upic', 'uPic'], ['picsee', 'Picsee'],
             ['picgoCore', 'PicGo-Core (command line)'], ['picgoApp', 'PicGo.app'],
             ['piclist', 'PicList'], ['custom', 'Custom Command'] ] },
-          { kind: 'button', label: '', button: 'Test Uploader',
-            action: () => { void invoke('images.testUploader').then((result) => notifyUser(result.error || (result.ok ? '上传测试成功：' + result.urls.join('\n') : result.message))); } },
+          { kind: 'button', label: '', button: 'Test Uploader', pending: 'Testing uploader…',
+            action: async () => { const result = await invoke('images.testUploader'); if (result.error || !result.ok) throw new Error(result.error || result.message); await notifyUser(t('Upload test succeeded: ') + result.urls.join('\n')); } },
           { kind: 'text', key: 'imageUploadCommand', label: 'Uploader command' },
           { kind: 'note', text: 'iPic / uPic / Picsee require a configured command that prints an image URL. PicGo.app / PicList use their local HTTP service.' },
           { kind: 'text', key: 'imageUploadEndpoint', label: 'PicGo / PicList HTTP endpoint', placeholder: 'http://127.0.0.1:36677/upload' },
@@ -191,7 +195,7 @@ function buildPanes(): Pane[] {
       title: 'Markdown',
       build: () => [
         { title: '', rows: [
-          { kind: 'note', text: '(Following preferences will be applied after restart.)' } ] },
+          { kind: 'note', text: 'Most settings apply immediately. Restart to apply changes to math packages and equation numbering.' } ] },
         { title: 'Syntax Preference', rows: [
           { kind: 'hint', text: 'only apply to quotes and lists created from menu bar or hybrid view' },
           { kind: 'check', key: 'strictMode', label: 'Strict Mode' },
@@ -305,12 +309,12 @@ function buildPanes(): Pane[] {
           { kind: 'check', key: 'showWordCount', label: 'Show word count in status bar' },
           { kind: 'number', key: 'readingSpeed', label: 'Reading speed', min: 1, max: 999, step: 1, suffix: 'words per minute',
             presets: [[120, '120 words/minute (Slow)'], [240, '240 words/minute (Medium)'], [382, '382 words/minute (Fast)']] },
-          { kind: 'button', label: '', button: 'Reset reading speed', action: () => { void put('readingSpeed', 382).then(() => renderPane(currentPane)); } },
+          { kind: 'button', label: '', button: 'Reset reading speed', action: () => put('readingSpeed', 382).then(() => renderPane(currentPane)) },
         ] },
         { title: 'Themes', rows: [
           { kind: 'select', key: 'theme', label: 'Theme', options: themeOptions(), wide: true },
           { kind: 'button', label: '', button: 'Open Theme Folder',
-            action: () => void invoke('theme.openFolder') },
+            action: () => invoke('theme.openFolder') },
           { kind: 'note', text: 'Install a theme by copying its CSS and assets into the theme folder.' },
         ] },
       ],
@@ -321,23 +325,22 @@ function buildPanes(): Pane[] {
       title: 'General',
       build: () => [
         { title: 'Language', rows: [
-          { kind: 'hint', text: '(applied after restart)' },
           { kind: 'select', key: 'menuLanguage', label: '', options: L10N },
           { kind: 'note', text: 'Applied immediately — no restart needed.' },
         ] },
         { title: 'Registration / Activation', rows: [
           { kind: 'note', text: 'Aropyt is a local replica and has no activation, licence server or updater.' },
           { kind: 'button', label: '', button: 'About Aropyt',
-            action: () => void invoke('window.about') },
+            action: () => invoke('window.about') },
         ] },
         { title: 'Shortcut Keys', rows: [
           { kind: 'button', label: 'Key bindings are read from conf.user.json → keyBinding.',
-            button: 'Open Config Folder', action: () => void invoke('setting.openConfFolder') },
+            button: 'Open Config Folder', action: () => invoke('setting.openConfFolder') },
         ] },
         { title: 'Advanced Settings', rows: [
           { kind: 'check', key: 'debugMode', label: 'Enable debug mode' },
           { kind: 'button', label: '', button: 'Open User Data Folder',
-            action: () => void invoke('setting.openUserDataFolder') },
+            action: () => invoke('setting.openUserDataFolder') },
         ] },
       ],
     },
@@ -346,11 +349,11 @@ function buildPanes(): Pane[] {
 
 /* ------------------------------------------------------------------ render */
 
-function notifyUser(message: string): void {
-  alert(message);
+async function notifyUser(message: string, type: 'info' | 'error' = 'info'): Promise<void> {
+  await invoke('dialog.showMessageBox', { type, title: t('Preferences'), message, buttons: [t('OK')], defaultId: 0, cancelId: 0 });
 }
 
-function buildRow(row: Row): HTMLElement {
+function buildRow(row: Row, groupTitle: string): HTMLElement {
   const el = document.createElement('div');
   el.className = 'pref-row';
 
@@ -358,7 +361,7 @@ function buildRow(row: Row): HTMLElement {
     el.classList.add('is-stacked');
     const p = document.createElement('p');
     p.className = row.kind === 'note' ? 'pref-note' : 'pref-hint-line';
-    p.textContent = row.text;
+    p.textContent = t(row.text);
     el.appendChild(p);
     return el;
   }
@@ -378,7 +381,7 @@ function buildRow(row: Row): HTMLElement {
   if (text) {
     const name = document.createElement('span');
     name.className = 'pref-name';
-    name.textContent = text;
+    name.textContent = t(text);
     labelBox.appendChild(name);
   }
   el.appendChild(labelBox);
@@ -411,7 +414,7 @@ function buildRow(row: Row): HTMLElement {
     for (const [value, label] of row.options) {
       const opt = document.createElement('option');
       opt.value = value;
-      opt.textContent = label;
+      opt.textContent = row.key === 'theme' ? label : t(label);
       select.appendChild(opt);
     }
     const cur = settings[row.key];
@@ -440,21 +443,21 @@ function buildRow(row: Row): HTMLElement {
     if (row.presets) {
       const list = document.createElement('datalist'); list.id = 'presets-' + row.key;
       for (const [value, label] of row.presets) {
-        const option = document.createElement('option'); option.value = String(value); option.label = label; list.append(option);
+        const option = document.createElement('option'); option.value = String(value); option.label = t(label); list.append(option);
       }
       input.setAttribute('list', list.id); control.append(list);
     }
     if (row.suffix) {
       const s = document.createElement('span');
       s.className = 'pref-suffix';
-      s.textContent = row.suffix;
+      s.textContent = t(row.suffix);
       control.appendChild(s);
     }
   } else if (row.kind === 'text') {
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'pref-text';
-    if (row.placeholder) input.placeholder = row.placeholder;
+    if (row.placeholder) input.placeholder = t(row.placeholder);
     const cur = settings[row.key];
     input.value = cur === undefined || cur === null ? '' : String(cur);
     input.addEventListener('change', () => void put(row.key, input.value));
@@ -462,12 +465,23 @@ function buildRow(row: Row): HTMLElement {
   } else {
     const btn = document.createElement('button');
     btn.className = 'pref-btn';
-    btn.textContent = row.button;
-    btn.addEventListener('click', row.action);
+    btn.textContent = t(row.button);
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      if (row.pending) btn.textContent = t(row.pending);
+      try { await row.action(); }
+      catch (error) { await notifyUser(t('Operation failed: ') + (error instanceof Error ? error.message : String(error)), 'error'); }
+      finally { btn.disabled = false; btn.textContent = t(row.button); }
+    });
     control.appendChild(btn);
   }
 
-  for (const field of control.querySelectorAll('input,select')) field.setAttribute('aria-label', row.label || ('key' in row ? row.key : row.kind));
+  for (const field of control.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select')) {
+    field.setAttribute('aria-label', t(row.label || groupTitle));
+    if ('key' in row) field.dataset.key = row.key;
+    if (row.kind === 'radio') field.value = row.value;
+  }
   el.appendChild(control);
   return el;
 }
@@ -475,8 +489,99 @@ function buildRow(row: Row): HTMLElement {
 async function put(key: string, value: unknown): Promise<void> {
   settings[key] = value;
   await invoke('setting.put', key, value);
+  if (key === 'menuLanguage') await refreshLanguageFromSettings();
   if (key === 'theme') await invoke('prefs.themeChanged');
   if (key === 'showStatusBar') await invoke('prefs.applyChrome');
+}
+
+type PreferenceField = HTMLInputElement | HTMLSelectElement;
+function updateControl(key: string, value: unknown): void {
+  for (const field of document.querySelectorAll<PreferenceField>('[data-key]')) {
+    if (field.dataset.key !== key) continue;
+    if (field instanceof HTMLInputElement && field.type === 'checkbox') field.checked = !!value;
+    else if (field instanceof HTMLInputElement && field.type === 'radio') field.checked = field.value === String(value);
+    else if (document.activeElement !== field) field.value = String(value ?? '');
+  }
+}
+
+async function refreshLanguageFromSettings(): Promise<void> {
+  const revision = ++languageReadRevision;
+  const current = await invoke<Record<string, any>>('setting.getAll');
+  if (revision !== languageReadRevision) return;
+  // Notifications can arrive out of write order; the stored value is authoritative.
+  settings.menuLanguage = current?.menuLanguage ?? 'auto';
+  refreshLanguage();
+}
+
+/** Translate in place: replacing a focused input can collapse its native WebKit selection. */
+function translateCurrentPane(): void {
+  const host = document.getElementById('pref-content');
+  if (!host?.children.length) { renderPane(currentPane); return; }
+  const pane = panes.find(item => item.id === currentPane) ?? panes[0];
+  const groups = pane.build(settings), query = searchQuery();
+  for (const [index, group] of groups.entries()) {
+    const box = host.children[index] as HTMLElement;
+    const heading = box.querySelector('h4');
+    if (heading) heading.textContent = t(group.title);
+    box.classList.toggle('pref-search-match', !!query && groupMatches(group, query));
+    const rows = box.querySelectorAll<HTMLElement>('.pref-row');
+    for (const [rowIndex, row] of group.rows.entries()) {
+      const element = rows[rowIndex];
+      if (row.kind === 'note' || row.kind === 'hint') {
+        element.querySelector('.pref-note, .pref-hint-line')!.textContent = t(row.text);
+        continue;
+      }
+      const label = element.querySelector('.pref-name');
+      if (label) label.textContent = t(row.label);
+      for (const field of element.querySelectorAll<PreferenceField>('input,select')) {
+        field.setAttribute('aria-label', t(row.label || group.title));
+      }
+      if (row.kind === 'select') {
+        const select = element.querySelector('select')!;
+        for (const option of select.options) {
+          const label = row.options.find(([value]) => value === option.value)?.[1];
+          if (label !== undefined) option.textContent = row.key === 'theme' ? label : t(label);
+        }
+        if (row.key === 'menuLanguage') select.value = String(settings.menuLanguage ?? 'auto');
+      } else if (row.kind === 'number') {
+        const suffix = element.querySelector('.pref-suffix');
+        if (suffix && row.suffix) suffix.textContent = t(row.suffix);
+        for (const option of element.querySelectorAll<HTMLOptionElement>('datalist option')) {
+          const label = row.presets?.find(([value]) => String(value) === option.value)?.[1];
+          if (label !== undefined) option.label = t(label);
+        }
+      } else if (row.kind === 'text') {
+        if (row.placeholder) element.querySelector('input')!.placeholder = t(row.placeholder);
+      } else if (row.kind === 'button') {
+        const button = element.querySelector('button')!;
+        button.textContent = t(button.disabled && row.pending ? row.pending : row.button);
+      }
+    }
+  }
+}
+
+function refreshLanguage(): void {
+  const language = resolveLang(navigator.language, settings.menuLanguage);
+  const main = document.querySelector<HTMLElement>('.pref-main');
+  const scrollTop = main?.scrollTop ?? 0;
+  setUiLanguage(language);
+  panes = buildPanes();
+  document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+  document.title = t('Preferences');
+  for (const item of document.querySelectorAll<HTMLElement>('.pref-nav-item')) {
+    item.textContent = t(panes.find(pane => pane.id === item.dataset.pane)?.title || '');
+  }
+  const search = document.getElementById('pref-search') as HTMLInputElement | null;
+  if (search) { search.placeholder = t('Search for...'); search.setAttribute('aria-label', t('Search for...')); }
+  translateCurrentPane();
+  const query = searchQuery();
+  for (const item of document.querySelectorAll<HTMLElement>('.pref-nav-item')) {
+    const pane = panes.find(pane => pane.id === item.dataset.pane);
+    item.classList.toggle('pref-search-muted', !!query && !!pane &&
+      !(pane.title + ' ' + t(pane.title)).toLocaleLowerCase().includes(query) &&
+      !pane.build(settings).some(group => groupMatches(group, query)));
+  }
+  if (main) main.scrollTop = scrollTop;
 }
 
 function renderPane(id: string): void {
@@ -493,10 +598,10 @@ function renderPane(id: string): void {
     box.classList.toggle('pref-search-match', !!query && groupMatches(group, query));
     if (group.title) {
       const h = document.createElement('h4');
-      h.textContent = group.title;
+      h.textContent = t(group.title);
       box.appendChild(h);
     }
-    for (const row of group.rows) box.appendChild(buildRow(row));
+    for (const row of group.rows) box.appendChild(buildRow(row, group.title));
     host.appendChild(box);
   }
 }
@@ -505,11 +610,13 @@ function searchQuery(): string {
   return (document.getElementById('pref-search') as HTMLInputElement | null)?.value.trim().toLocaleLowerCase() || '';
 }
 function groupMatches(group: Group, query: string): boolean {
-  return JSON.stringify(group).toLocaleLowerCase().includes(query);
+  // Search both language forms, so switching languages does not invalidate a query.
+  return JSON.stringify(group, (_key, value) => typeof value === 'string'
+    ? value + ' ' + t(value, 'zh') : value).toLocaleLowerCase().includes(query);
 }
 function searchPreferences(): void {
   const query = searchQuery();
-  const matching = panes.filter((pane) => pane.title.toLocaleLowerCase().includes(query) || pane.build(settings).some((group) => groupMatches(group, query)));
+  const matching = panes.filter((pane) => (pane.title + ' ' + t(pane.title)).toLocaleLowerCase().includes(query) || pane.build(settings).some((group) => groupMatches(group, query)));
   for (const item of document.querySelectorAll<HTMLElement>('.pref-nav-item')) {
     item.classList.toggle('pref-search-muted', !!query && !matching.some((pane) => pane.id === item.dataset.pane));
   }
@@ -518,12 +625,29 @@ function searchPreferences(): void {
   document.querySelector('.pref-search-match')?.scrollIntoView({ block: 'nearest' });
 }
 
+function selectActiveField(): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) return false;
+  if (active instanceof HTMLInputElement && !['text', 'search', 'url', 'email', 'password', 'tel', 'number'].includes(active.type)) return false;
+  active.select();
+  return true;
+}
+
+function installFieldShortcuts(): void {
+  document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey) return;
+    const primary = /Mac/i.test(navigator.platform) ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+    if (primary && event.key.toLowerCase() === 'a' && selectActiveField()) event.preventDefault();
+  }, true);
+}
+
 /* ------------------------------------------------------------------- boot */
 
 async function boot(): Promise<void> {
+  installFieldShortcuts();
   settings = (await invoke<Record<string, any>>('setting.getAll')) ?? {};
   themes = (await invoke<string[]>('setting.getThemes')) ?? [];
-  panes = buildPanes();
+  refreshLanguage();
 
   const isDark = await invoke<boolean>('theme.isDark');
   document.body.classList.toggle('dark', !!isDark);
@@ -546,6 +670,21 @@ async function boot(): Promise<void> {
   for (const item of Array.from(document.querySelectorAll<HTMLElement>('.pref-nav-item'))) item.classList.toggle('active', item.dataset.pane === initialPane);
   window.JSBridge.on((event) => {
     if (event.type === 'menu' && event.arg?.action === 'close') { void invoke('window.close'); return; }
+    if (event.type === 'menu' && event.arg?.action === 'setMenuLanguage') { void put('menuLanguage', event.arg.arg); return; }
+    if (event.type === 'menu' && event.arg?.action === 'selectAll') { selectActiveField(); return; }
+    if (event.type === 'menu' && ['undo', 'redo', 'cut', 'copy', 'paste', 'pastePlain'].includes(event.arg?.action)) {
+      void invoke(event.arg.action === 'pastePlain' ? 'webContents.pastePlain' : 'webContents.' + event.arg.action);
+      return;
+    }
+    if (event.type === 'setting-changed' && event.arg?.key) {
+      if (event.arg.key === 'menuLanguage') {
+        void refreshLanguageFromSettings().catch(error => notifyUser(t('Operation failed: ') + String(error), 'error'));
+      } else {
+        settings[event.arg.key] = event.arg.value;
+        updateControl(event.arg.key, event.arg.value);
+      }
+      return;
+    }
     if (event.type !== 'preferences-pane') return;
     renderPane(String(event.arg));
     for (const item of Array.from(document.querySelectorAll<HTMLElement>('.pref-nav-item'))) item.classList.toggle('active', item.dataset.pane === event.arg);
@@ -555,6 +694,6 @@ async function boot(): Promise<void> {
 window.addEventListener('DOMContentLoaded', () => {
   void boot().catch((err) => {
     const host = document.getElementById('pref-content');
-    if (host) host.textContent = 'Failed to load preferences: ' + String(err);
+    if (host) host.textContent = t('Failed to load preferences: ') + String(err);
   });
 });

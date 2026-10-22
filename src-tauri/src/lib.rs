@@ -3,6 +3,8 @@ mod dialogs;
 mod dictionaries;
 mod files;
 mod images;
+mod i18n;
+use i18n::text as tr;
 mod menus;
 mod native;
 mod state;
@@ -24,7 +26,9 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 pub fn send(win: &WebviewWindow, event: Value) {
-    let _ = win.emit("aropyt:event", event);
+    // Emitter::emit broadcasts even when called on a WebviewWindow. Commands,
+    // document opens and close requests must reach only their intended window.
+    let _ = win.emit_to(win.label(), "aropyt:event", event);
 }
 fn broadcast(app: &AppHandle, event: Value) {
     let _ = app.emit("aropyt:event", event);
@@ -70,7 +74,7 @@ pub fn evaluate(win: &WebviewWindow, code: &str) -> Result<Value> {
         .remove(&id);
     let v = result?;
     if v["ok"] == false {
-        return Err(v["error"].as_str().unwrap_or("JavaScript failed").into());
+        return Err(v["error"].as_str().unwrap_or(tr("JavaScript 执行失败", "JavaScript execution failed")).into());
     }
     Ok(v["value"].clone())
 }
@@ -153,7 +157,7 @@ fn preferences(app: &AppHandle, pane: Option<&str>) -> Result<()> {
         pane.map(|p| format!("?pane={p}")).unwrap_or_default()
     );
     let win = WebviewWindowBuilder::new(app, "preferences", WebviewUrl::App(path.into()))
-        .title("Preferences")
+        .title(tr("偏好设置", "Preferences"))
         .inner_size(920., 720.)
         .min_inner_size(700., 500.)
         .build()
@@ -208,6 +212,10 @@ pub fn dispatch(
     let v = |n| value(args, n);
     let ok = || Ok(json!(true));
     match method {
+        "app.setUiLocale" => {
+            st.update_ui_language(app, Some(text(0)));
+            ok()
+        }
         "bridge.send" => {
             if text(0) == "doc.syncChange" {
                 set_dirty(win, v(1)["dirty"] == true);
@@ -322,7 +330,7 @@ pub fn dispatch(
             dialogs::message(
                 app,
                 win,
-                &json!({"message":"Aropyt 1.0.0","detail":"基于 Tauri 2 的 Markdown 编辑器\nMIT License"}),
+                &json!({"message":"Aropyt 1.0.0","detail":tr("基于 Tauri 2 的 Markdown 编辑器\nMIT 许可证", "A Markdown editor built with Tauri 2\nMIT License")}),
             );
             ok()
         }
@@ -337,7 +345,7 @@ pub fn dispatch(
                 "documents" => app.path().document_dir().map_err(err)?,
                 "downloads" => app.path().download_dir().map_err(err)?,
                 "temp" => std::env::temp_dir(),
-                _ => return Err(format!("未知数据目录：{}", text(0))),
+                _ => return Err(format!("{}{}", tr("未知数据目录：", "Unknown data directory: "), text(0))),
             };
             Ok(json!(path))
         }
@@ -346,7 +354,7 @@ pub fn dispatch(
             let pick = dialogs::open(
                 app,
                 win,
-                &json!({"properties":[if folder{"openDirectory"}else{"openFile"}],"filters":if folder{json!([])}else{json!([{"name":"Markdown","extensions":["md","markdown","mdown","mkd","mdwn","text","txt","rmd"]},{"name":"All Files","extensions":["*"]}])}}),
+                &json!({"properties":[if folder{"openDirectory"}else{"openFile"}],"filters":if folder{json!([])}else{json!([{"name":"Markdown","extensions":["md","markdown","mdown","mkd","mdwn","text","txt","rmd"]},{"name":tr("所有文件", "All Files"),"extensions":["*"]}])}}),
             );
             if pick["canceled"] == true {
                 return Ok(Value::Null);
@@ -399,7 +407,7 @@ pub fn dispatch(
         "app.download" | "shell.openExternal" => {
             let url = url::Url::parse(text(0)).map_err(err)?;
             if !matches!(url.scheme(), "http" | "https" | "mailto") {
-                return Err("不支持的外部链接协议".into());
+                return Err(tr("不支持的外部链接协议", "Unsupported external link protocol").into());
             }
             app.opener()
                 .open_url(url.as_str(), None::<&str>)
@@ -549,7 +557,7 @@ pub fn dispatch(
         }
         "document.getDraft" | "document.removeDraft" => {
             if text(0).len() != 32 || !text(0).bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err("无效的草稿".into());
+                return Err(tr("无效的草稿", "Invalid draft").into());
             }
             let p = st.data.join(format!("drafts/{}.json", text(0)));
             if method == "document.getDraft" {
@@ -566,6 +574,9 @@ pub fn dispatch(
         }
         "setting.put" => {
             st.put(text(0), v(1))?;
+            if text(0) == "menuLanguage" {
+                st.update_ui_language(app, None);
+            }
             if text(0) == "presetSpellCheck" {
                 st.put("spellCheck", json!(text(1) != "off"))?;
             }
@@ -677,6 +688,11 @@ pub fn dispatch(
         }
         "fs.mkdir" => {
             fs::create_dir_all(text(0)).map_err(err)?;
+            ok()
+        }
+        "fs.createFile" => {
+            fs::OpenOptions::new().write(true).create_new(true)
+                .open(files::local_path(text(0))).map_err(err)?;
             ok()
         }
         "fs.stat" => files::stat(&files::local_path(text(0))),
@@ -870,7 +886,7 @@ pub fn dispatch(
             let pick = dialogs::open(
                 app,
                 win,
-                &json!({"title":format!("导入 {language} 词典：同时选择 .aff 和 .dic"),"properties":["openFile","multiSelections"],"filters":[{"name":"Hunspell / All Files","extensions":["*"]}]}),
+                &json!({"title":format!("{} {language} {}", tr("导入", "Import"), tr("词典：同时选择 .aff 和 .dic", "dictionary: select both .aff and .dic files")),"properties":["openFile","multiSelections"],"filters":[{"name":tr("Hunspell / 所有文件", "Hunspell / All Files"),"extensions":["*"]}]}),
             );
             if pick["canceled"] == true {
                 return Ok(Value::Null);
@@ -880,12 +896,12 @@ pub fn dispatch(
                 .iter()
                 .filter_map(Value::as_str)
                 .find(|p| p.to_lowercase().ends_with(".aff"))
-                .ok_or("请选择 .aff 和 .dic 两个文件")?;
+                .ok_or(tr("请选择 .aff 和 .dic 两个文件", "Select both the .aff and .dic files"))?;
             let dic = paths
                 .iter()
                 .filter_map(Value::as_str)
                 .find(|p| p.to_lowercase().ends_with(".dic"))
-                .ok_or("请选择 .aff 和 .dic 两个文件")?;
+                .ok_or(tr("请选择 .aff 和 .dic 两个文件", "Select both the .aff and .dic files"))?;
             let result = dictionaries::import(&st, &language, Path::new(aff), Path::new(dic))?;
             broadcast(app, json!({"type":"dictionary-installed","arg":language}));
             Ok(result)
@@ -905,14 +921,14 @@ pub fn dispatch(
                 dialogs::message(
                     app,
                     win,
-                    &json!({"message":"Aropyt 许可证","detail":"项目包声明为 MIT。Aropyt 没有商业激活服务，第三方组件保留原始授权。"}),
+                    &json!({"message":tr("Aropyt 许可证", "Aropyt License"),"detail":tr("项目包声明为 MIT。Aropyt 没有商业激活服务，第三方组件保留原始授权。", "This project is licensed under MIT. Aropyt has no commercial activation service. Third-party components retain their original licenses.")}),
                 );
             } else {
                 let file = match text(0) {
-                    "privacy" => "docs/privacy.md",
-                    "credits" => "docs/credits.md",
-                    "changelog" => "docs/migration.md",
-                    _ => "docs/user-guide.md",
+                    "privacy" => tr("docs/privacy.md", "docs/privacy.en.md"),
+                    "credits" => tr("docs/credits.md", "docs/credits.en.md"),
+                    "changelog" => tr("docs/migration.md", "docs/migration.en.md"),
+                    _ => tr("docs/user-guide.md", "docs/user-guide.en.md"),
                 };
                 new_window(
                     app,
@@ -925,7 +941,7 @@ pub fn dispatch(
             images::handle(app, win, method, args)
         }
         m if m.starts_with("pandoc.") => conversion::handle(app, win, method, args),
-        _ => Err(format!("未知操作：{method}")),
+        _ => Err(format!("{}{method}", tr("未知操作：", "Unknown operation: "))),
     }
 }
 #[tauri::command]
@@ -972,24 +988,25 @@ fn launch_files(argv: impl Iterator<Item = String>, cwd: &Path) -> Vec<String> {
         .collect()
 }
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        .plugin(tauri_plugin_opener::init());
+    // An isolated harness must not forward its temporary fixture to a user's
+    // already running editor or reuse that editor's profile.
+    let isolated_test = std::env::var_os("AROPYT_DATA_DIR").is_some()
+        && std::env::var("AROPYT_TEST_PORT").ok().and_then(|v| v.parse::<u16>().ok()).is_some()
+        && std::env::var("AROPYT_TEST_TOKEN").is_ok_and(|v| v.len() >= 32);
+    let builder = if isolated_test { builder } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let files = launch_files(argv.into_iter().skip(1), Path::new(&cwd));
             open_files(app, files);
         }))
+    };
+    let app = builder
         .invoke_handler(tauri::generate_handler![bridge, eval_result])
         .on_menu_event(|app, event| {
-            let action = app
-                .state::<AppState>()
-                .menu_actions
-                .lock()
-                .unwrap()
-                .get(event.id().as_ref())
-                .cloned();
-            if let (Some(win), Some(action)) = (focused(app), action) {
-                send(&win, action);
+            if let Some(win) = focused(app) {
+                menus::dispatch_event(app, &win, event.id().as_ref());
             }
         })
         .setup(|app| {

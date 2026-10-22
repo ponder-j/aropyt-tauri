@@ -1,5 +1,5 @@
 import type { DocEditor } from './editor';
-import { SPELL_LANGUAGES, SpellState } from '../shared/spellcheck';
+import { SPELL_LANGUAGES, SpellState, spellLanguageName } from '../shared/spellcheck';
 import { renderDocument } from './md';
 
 /** Menu choices apply to this document; Global Settings controls defaults. */
@@ -61,11 +61,14 @@ export class SpellcheckControl {
   }
   private renderLanguages(): void {
     const query = this.search.value.trim().toLocaleLowerCase(); this.languages.replaceChildren();
-    for (const [code, name] of SPELL_LANGUAGES) if (!query || `${code} ${name}`.toLocaleLowerCase().includes(query)) this.languages.append(this.option(code, name, code));
+    for (const [code, englishName] of SPELL_LANGUAGES) {
+      const name = spellLanguageName(code, this.options().lang);
+      if (!query || `${code} ${name} ${englishName}`.toLocaleLowerCase().includes(query)) this.languages.append(this.option(code, name, code));
+    }
   }
   update(): void {
     const { settings, lang } = this.options(), zh = lang === 'zh';
-    this.button.title = zh ? '拼写检查' : 'Spell Check'; this.button.setAttribute('aria-label', this.button.title);
+    this.button.title = (zh ? '拼写检查' : 'Spell Check') + (this.state.enabled ? '' : zh ? '（已禁用）' : ' (Disabled)'); this.button.setAttribute('aria-label', this.button.title);
     this.panel.setAttribute('aria-label', this.button.title); this.panel.lang = lang;
     this.search.placeholder = zh ? '选择拼写检查语言' : 'Select spell check language'; this.search.setAttribute('aria-label', this.search.placeholder);
     this.modes.replaceChildren(this.option('auto', zh ? '自动检测语言' : 'Auto Detect Language'), this.option('off', zh ? '不使用拼写检查' : 'Disable Spell Check'));

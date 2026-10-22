@@ -1,3 +1,4 @@
+use crate::i18n::text as tr;
 use crate::{dialogs, files::*, images, native, state::*};
 use serde_json::{json, Value};
 use std::{
@@ -26,7 +27,7 @@ pub fn execute(binary: &str, args: &[String], input: Option<String>) -> Result<S
     }
     let mut child = command.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            "未找到程序，请在偏好设置中配置完整路径：".to_string() + binary
+            tr("未找到程序，请在偏好设置中配置完整路径：", "Program not found. Configure its full path in Preferences: ").to_string() + binary
         } else {
             err(e)
         }
@@ -53,13 +54,13 @@ pub fn execute(binary: &str, args: &[String], input: Option<String>) -> Result<S
     if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
-        return Err("转换程序超时".into());
+        return Err(tr("转换程序超时", "The conversion program timed out").into());
     }
     let _ = write.join();
-    let out = out.join().map_err(|_| "输出读取失败")?;
-    let errors = errors.join().map_err(|_| "错误输出读取失败")?;
+    let out = out.join().map_err(|_| tr("输出读取失败", "Unable to read program output"))?;
+    let errors = errors.join().map_err(|_| tr("错误输出读取失败", "Unable to read program error output"))?;
     if !status.unwrap().success() {
-        return Err(String::from_utf8_lossy(&errors).trim().to_string());
+        return Err(format!("{}\n{}", tr("转换程序执行失败。", "The conversion program failed."), String::from_utf8_lossy(&errors).trim()));
     }
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
@@ -255,11 +256,11 @@ fn prepare_html_images(st: &AppState, source: &str, directory: &Path) -> Result<
     Ok(Some(serde_json::to_string(&doc).map_err(err)?))
 }
 pub fn convert(st: &AppState, request: &Value, output: &Path) -> Result<()> {
-    let format = request["format"].as_str().ok_or("缺少导出格式")?;
+    let format = request["format"].as_str().ok_or(tr("缺少导出格式", "No export format was specified"))?;
     let catalog = formats();
     let spec = &catalog[format];
     if spec.is_null() {
-        return Err("不支持的导出格式".into());
+        return Err(tr("不支持的导出格式", "Unsupported export format").into());
     }
     let source = request["source"].as_str().unwrap_or("");
     let temp = tempfile::tempdir().map_err(err)?;
@@ -276,7 +277,7 @@ pub fn convert(st: &AppState, request: &Value, output: &Path) -> Result<()> {
             if lang.starts_with("mermaid") || ["flow", "sequence", "gantt"].contains(&lang) {
                 let svg = request["diagrams"][index]
                     .as_str()
-                    .ok_or("图表尚未渲染完成，未生成导出文件。")?;
+                    .ok_or(tr("图表尚未渲染完成，未生成导出文件。", "The diagram is still rendering. No export file was created."))?;
                 let p = temp.path().join(format!("diagram-{}.png", index + 1));
                 let (size, height) = files_svg_size(svg);
                 let png = native::render(
@@ -289,7 +290,7 @@ pub fn convert(st: &AppState, request: &Value, output: &Path) -> Result<()> {
                 fs::write(&p, png).map_err(err)?;
                 replacements.push((
                     range,
-                    format!("![图表 {}](<{}>)\n\n", index + 1, p.display()),
+                    format!("![{} {}](<{}>)\n\n", tr("图表", "Diagram"), index + 1, p.display()),
                 ));
                 index += 1;
             }
@@ -355,7 +356,7 @@ pub fn handle(app: &AppHandle, win: &WebviewWindow, method: &str, args: &[Value]
                 dialogs::open(
                     app,
                     win,
-                    &json!({"properties":["openFile"],"filters":[{"name":"Documents","extensions":["docx","odt","epub","html","htm","rst","tex","textile","opml"]}]}),
+                    &json!({"properties":["openFile"],"filters":[{"name":tr("文档", "Documents"),"extensions":["docx","odt","epub","html","htm","rst","tex","textile","opml"]}]}),
                 )
             };
             if pick["canceled"] == true {
@@ -384,14 +385,14 @@ pub fn handle(app: &AppHandle, win: &WebviewWindow, method: &str, args: &[Value]
             let formats = formats();
             let spec = &formats[format];
             if spec.is_null() {
-                return Err("不支持的导出格式".into());
+                return Err(tr("不支持的导出格式", "Unsupported export format").into());
             }
             let file = req["file"].as_str();
             let name = format!(
                 "{}.{}",
                 file.and_then(|p| Path::new(p).file_stem())
                     .and_then(|s| s.to_str())
-                    .unwrap_or("Untitled"),
+                    .unwrap_or(tr("未命名", "Untitled")),
                 spec["extension"].as_str().unwrap()
             );
             let picked = if let Some(output) = req["output"].as_str() {
@@ -410,6 +411,6 @@ pub fn handle(app: &AppHandle, win: &WebviewWindow, method: &str, args: &[Value]
             convert(&st, req, Path::new(output))?;
             Ok(json!(output))
         }
-        _ => Err(format!("未知转换操作：{method}")),
+        _ => Err(format!("{}{method}", tr("未知转换操作：", "Unknown conversion operation: "))),
     }
 }

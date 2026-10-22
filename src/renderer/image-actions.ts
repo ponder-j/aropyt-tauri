@@ -1,6 +1,10 @@
-import { escapeHtml, standaloneImage, StandaloneImage } from './md';
+import { escapeHtml, standaloneImage, StandaloneImage, MarkdownReferences } from './md';
 
 export const IMAGE_ZOOM_LEVELS = [25, 33, 50, 67, 80, 100, 150, 200];
+export interface ImageSourceRange {
+  from: number; to: number; source: string; table?: boolean; rawSource?: string;
+  cell?: { tableFrom: number; row: number; column: number };
+}
 export interface ImageMenuItem { label: string; action?: string; type?: 'separator' | 'checkbox'; checked?: boolean; submenu?: ImageMenuItem[] }
 export function imageMenu(source: string, zh: boolean): ImageMenuItem[] {
   const image = standaloneImage(source)!;
@@ -15,16 +19,16 @@ export function imageMenu(source: string, zh: boolean): ImageMenuItem[] {
 function htmlImage(attributes: Record<string, string>): string {
   return '<img ' + Object.entries(attributes).map(([name, value]) => `${name}="${escapeHtml(value)}"`).join(' ') + ' />';
 }
-export function replaceImageSource(source: string, src: string): string {
-  const image = standaloneImage(source); if (!image) return source;
+export function replaceImageSource(source: string, src: string, references?: MarkdownReferences): string {
+  const image = standaloneImage(source, references); if (!image) return source;
   if (image.kind === 'html') return htmlImage({ ...image.attributes, src });
   const alt = image.alt.replace(/[\\[\]]/g, '\\$&');
   const url = src.replace(/ /g, '%20').replace(/[()]/g, '\\$&');
   const title = image.title ? ' "' + image.title.replace(/[\\"]/g, '\\$&') + '"' : '';
   return `![${alt}](${url}${title})`;
 }
-export function transformImage(source: string, action: string): string | null {
-  const image = standaloneImage(source); if (!image) return null;
+export function transformImage(source: string, action: string, references?: MarkdownReferences): string | null {
+  const image = standaloneImage(source, references); if (!image) return null;
   if (action === 'image:markdown') {
     if (image.kind === 'markdown') return source;
     const alt = image.alt.replace(/[\\[\]]/g, '\\$&'), src = image.src.replace(/ /g, '%20').replace(/[()]/g, '\\$&');

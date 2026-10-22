@@ -1,3 +1,4 @@
+import { uiText } from '../shared/ui-language';
 import { escapeHtml, renderDocument } from './md';
 
 export interface ExportDocumentOptions {
@@ -26,16 +27,16 @@ export async function createExportDocument(options: ExportDocumentOptions): Prom
     for (const diagram of root.querySelectorAll<HTMLElement>('.md-diagram')) {
       const source = diagram.querySelector('.md-diagram-pending')?.textContent ?? '';
       try { diagram.innerHTML = await options.diagram(source); }
-      catch (error) { throw new Error('Mermaid 渲染失败：' + String(error)); }
+      catch (error) { throw new Error(uiText('Mermaid 渲染失败：', 'Mermaid rendering failed: ') + String(error)); }
       diagram.dataset.rendered = '1';
     }
     for (const img of root.querySelectorAll<HTMLImageElement>('img')) {
       const source = img.getAttribute('src') ?? '';
       const embedded = await options.image(source);
-      if (typeof embedded !== 'string') throw new Error('无法读取导出图片：' + source);
+      if (typeof embedded !== 'string') throw new Error(uiText('无法读取导出图片：', 'Could not read image for export: ') + source);
       img.src = embedded;
     }
-    if (root.querySelector('.md-math-fallback')) throw new Error('公式引擎尚未准备好，请重试导出');
+    if (root.querySelector('.md-math-fallback')) throw new Error(uiText('公式引擎尚未准备好，请重试导出', 'The math engine is not ready. Try exporting again.'));
     if (options.preserveWhitespace) {
       // The renderer's formatting newline after <br> must not become a second
       // visual break when paragraphs preserve spaces.

@@ -1,14 +1,10 @@
-import { app, Menu, MenuItemConstructorOptions, loadSettings, clearRecentFiles, platform } from './menu-host';
+import { app, Menu, MenuItemConstructorOptions, loadSettings, platform } from './menu-host';
 const path = { basename: (p: string) => p.split(/[\\/]/).pop() || '' };
 import { ACCEL, Lang, LangPref, LabelKey, RENDERER_KEYS, pick, resolveLang } from '../main/menu-model';
 
-export type CommandSender = (action: string, arg?: unknown) => void;
-
 interface MenuCtx {
-  send: CommandSender;
   listThemes: () => string[];
   currentTheme: () => string;
-  openFile: (file: string) => void;
 }
 
 function detectLang(): Lang {
@@ -37,7 +33,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
     accelerator: accel ? toElectronAccel(accel) : undefined,
     // Editing shortcuts belong to the renderer, which owns the selection.
     registerAccelerator: accel ? !RENDERER_KEYS.has(accel) : undefined,
-    click: () => ctx.send('menu', { action, arg }),
+    event: 'menu', action, arg,
     ...extra,
   });
 
@@ -45,7 +41,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
 
   const recent: MenuItemConstructorOptions[] = (s.recentFiles || []).slice(0, 12).map((f: string) => ({
     label: path.basename(f),
-    click: () => ctx.openFile(f),
+    event: 'open-file', arg: f,
   }));
   if (!recent.length) recent.push({ label: t('noRecent'), enabled: false });
 
@@ -55,16 +51,13 @@ export function buildMenu(ctx: MenuCtx): Menu {
       label: t('recentLocations'),
       submenu: (s.recentFolders || []).slice(0, 12).map((d: string): MenuItemConstructorOptions => ({
         label: path.basename(d) || d,
-        click: () => ctx.send('menu', { action: 'openFolder', arg: d }),
+        event: 'menu', action: 'openFolder', arg: d,
       })),
     },
     sep,
     {
       label: t('clearItems'),
-      click: () => {
-        clearRecentFiles();
-        buildMenu(ctx);
-      },
+      event: 'bridge', action: 'clearRecent',
     },
   ];
 
@@ -72,7 +65,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
     label: themeLabel(name),
     type: 'radio' as const,
     checked: name === ctx.currentTheme(),
-    click: () => ctx.send('menu', { action: 'setTheme', arg: name }),
+    event: 'menu', action: 'setTheme', arg: name,
   }));
 
   const template: MenuItemConstructorOptions[] = [
@@ -146,7 +139,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
       label: t('edit'),
       submenu: [
         item(t('undo'), 'undo', ACCEL.undo),
-        item(t('redo'), 'redo', ACCEL.redo),
+        item(t('redo'), 'redo', platform === 'darwin' ? 'Ctrl+Shift+Z' : ACCEL.redo),
         sep,
         { label: t('cut'), role: 'cut', accelerator: toElectronAccel(ACCEL.cut) },
         { label: t('copy'), role: 'copy', accelerator: toElectronAccel(ACCEL.copy) },
@@ -389,19 +382,19 @@ export function buildMenu(ctx: MenuCtx): Menu {
               label: t('langAuto'),
               type: 'radio' as const,
               checked: !loadSettings().menuLanguage || loadSettings().menuLanguage === 'auto',
-              click: () => ctx.send('menu', { action: 'setMenuLanguage', arg: 'auto' }),
+              event: 'menu', action: 'setMenuLanguage', arg: 'auto',
             },
             {
               label: t('langZh'),
               type: 'radio' as const,
               checked: loadSettings().menuLanguage === 'zh',
-              click: () => ctx.send('menu', { action: 'setMenuLanguage', arg: 'zh' }),
+              event: 'menu', action: 'setMenuLanguage', arg: 'zh',
             },
             {
               label: t('langEn'),
               type: 'radio' as const,
               checked: loadSettings().menuLanguage === 'en',
-              click: () => ctx.send('menu', { action: 'setMenuLanguage', arg: 'en' }),
+              event: 'menu', action: 'setMenuLanguage', arg: 'en',
             },
           ],
         },
@@ -410,20 +403,20 @@ export function buildMenu(ctx: MenuCtx): Menu {
   ];
 
   if (platform === 'darwin') template.splice(template.length - 1, 0, {
-    role: 'windowMenu', submenu: [
-      { role: 'minimize' }, { role: 'zoom' }, sep, { role: 'toggleTabBar' },
-      { role: 'selectPreviousTab' }, { role: 'selectNextTab' }, { role: 'showAllTabs' },
-      { role: 'moveTabToNewWindow' }, { role: 'mergeAllWindows' }, sep, { role: 'front' },
+    role: 'windowMenu', label: t('windowMenu'), submenu: [
+      { role: 'minimize', label: t('minimize') }, { role: 'zoom', label: t('zoomWindow') }, sep, { role: 'toggleTabBar', label: t('toggleTabBar') },
+      { role: 'selectPreviousTab', label: t('selectPreviousTab') }, { role: 'selectNextTab', label: t('selectNextTab') }, { role: 'showAllTabs', label: t('showAllTabs') },
+      { role: 'moveTabToNewWindow', label: t('moveTabToNewWindow') }, { role: 'mergeAllWindows', label: t('mergeAllWindows') }, sep, { role: 'front', label: t('front') },
     ],
   });
   if (platform === 'darwin') template.unshift({
     label: 'Aropyt',
     submenu: [
-      { role: 'about' }, sep,
+      { role: 'about', label: t('aboutApp') }, sep,
       item(t('preferences'), 'preferences', ACCEL.preferences), sep,
-      { role: 'services' }, sep,
-      { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, sep,
-      { role: 'quit' },
+      { role: 'services', label: t('services') }, sep,
+      { role: 'hide', label: t('hide') }, { role: 'hideOthers', label: t('hideOthers') }, { role: 'unhide', label: t('unhide') }, sep,
+      { role: 'quit', label: t('quit') },
     ],
   });
   const menu = Menu.buildFromTemplate(template);

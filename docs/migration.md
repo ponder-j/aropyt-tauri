@@ -1,3 +1,5 @@
+[中文](migration.md) | [English](migration.en.md)
+
 # Tauri 2 迁移核对
 
 本项目以原 Aropyt 的完整工作区为基线迁移。原项目修订记录在 [source-baseline.json](source-baseline.json)。编辑器和界面继续使用原实现；窗口、系统接口与持久化由 Rust / Tauri 2 提供。
@@ -22,7 +24,7 @@
 | Word、ODT、Epub、LaTeX 等九种转换及导入 | Pandoc 接口迁至 Rust；验证实际文件、Word 表格/可编辑公式/图表、HTML 图片尺寸及 LaTeX 持续资源。 |
 | 旧版配置、主题、恢复草稿、用户词典 | 首次启动复制到独立数据目录，保留旧目录；不覆盖目标中已有文件。 |
 
-渲染器中 23 个文件逐字节保留。修改的五个文件仅涉及系统图片 URL、Tauri 拖放路径、退出确认接口、可选词典入口及独立导出文档样式。新增的平台桥负责系统 WebView 差异，未重新设计界面。
+迁移基线保留了原编辑器与界面，平台桥负责系统 WebView 差异。后续使用本机 Typora 实际对照，补齐混排图片、引用式图片、脚注、表格图片局部编辑与右键文件操作、表格脚注、悬停预览及返回引用、Setext 范围及横向查找栏；当前对应行为和仍存差异见 [功能细节](typora-parity.md)。底栏与 DOM 右键菜单继续保留用户指定的 Windows/新版参考布局，未重新设计界面。
 
 ## 经用户确认的调整
 
@@ -32,10 +34,14 @@
 
 ## 验证范围
 
-首次迁移验证覆盖 ARM。macOS Apple Silicon 的 84 项真实 WebView 检查已通过；另外通过路径/URL 回归、13 组统计参考数据及类型检查。原 Electron 检查脚本归档在 `tests/electron-reference/`，不计入新版验证。Windows x64 与 Linux x64 的发行验证流程见 [构建与发布](releasing.md)，具体结果随 Release 提供。
+首次迁移验证覆盖 ARM。macOS Apple Silicon 的 84 项真实 WebView 检查已通过；另外通过路径/URL 回归、13 组统计参考数据及类型检查。原 Electron 检查脚本归档在 `tests/electron-reference/`，不计入新版验证。构建及发行流程见 [构建与发布](releasing.md)。当前验证范围为 ARM，未将 x64 结果计入本轮验证。
 
 覆盖实际文件、剪贴板、草稿、取消保存、词典下载与校验、离线检查、建议和学习、CLD2 检测、九种 Pandoc 格式、原生 PDF / PNG、多窗口及标签页。长文档 PDF 已核对分页、A4 页面和尾部文本，导出保持可选择文本与矢量公式/图表。
 
 macOS APP / DMG 使用本机 ARM 原生构建。默认 APP 约 20 MiB、DMG 约 15 MiB；本机旧版 Electron APP 约 400 MiB，APP 体积减少约 95%。词典不在安装包内。
 
 Linux ARM（aarch64，Docker / Xvfb / WebKitGTK）同样通过完整 84 项检查；修复了旧版 WebKitGTK 的缩放几何坐标差异，并让独立导出窗口在映射后完成原生截图。这些 ARM 结果不代替 x64 发行包验证。原项目的 Typora 差异仍见 [功能细节](typora-parity.md)。
+
+2026-10-22 本机 Typora 对照及侧栏修正后的历史验证，在 macOS ARM 安装包与 Linux ARM 中分别通过 109 项离线回归；包含在线词典下载的较早 Linux ARM 回归另有 110 项通过记录。后续编辑体验修正的最新回归数量、对照操作、网络验证边界和剩余差异见上述功能细节。
+
+侧栏界面回归可运行 `node tools/test-tauri.mjs --packaged --offline`（macOS 安装包）或 `node tools/test-tauri.mjs --no-build --offline`（已构建的 ARM 应用）。`--offline` 只排除依赖实时 CDN 的词典下载安装检查，保留默认无词典、编辑、侧栏、文件、取消保存和导出检查；不加此参数的默认流程仍验证在线下载与 WASM 拼写。CDN 连接可能间歇失败，网络结果应与界面结果分别记录。

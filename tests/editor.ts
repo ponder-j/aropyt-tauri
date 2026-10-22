@@ -1,10 +1,13 @@
 import { undo, redo } from '@codemirror/commands';
+import { StateEffect } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import { DocEditor, setBlockRenderer, setSingleBlockRenderer } from '../src/renderer/editor';
-import { blockRanges, renderDocument, setDialect } from '../src/renderer/md';
+import { blockRanges, renderDocument, setDialect, standaloneImage } from '../src/renderer/md';
 import { documentStatistics } from '../src/shared/document-statistics';
 import { transformImage } from '../src/renderer/image-actions';
 import { rangeAction } from '../src/renderer/editing-commands';
 import { displayFileUrl } from '../src/bridge/files';
+import { tableText } from '../src/renderer/table-dom';
 
 const runtimeErrors: string[] = [];
 window.addEventListener('error', (event) => runtimeErrors.push(event.message));
@@ -18,6 +21,8 @@ const editor = new DocEditor({ parent, doc: '', host: {
   docDir: () => undefined, math: (s) => s, resolveSrc: (s) => s, enhance: () => {},
 }, onChange: () => {} });
 const view = editor.view;
+// CodeMirror catches handler errors internally; include them in regression failures.
+view.dispatch({ effects: StateEffect.appendConfig.of(EditorView.exceptionSink.of(error => runtimeErrors.push(String(error)))) });
 // WebKit suspends animation frames when the test window is occluded or the
 // desktop is locked. Layout assertions still run against the real WebView.
 const frame = () => new Promise<void>((resolve) => {
@@ -76,6 +81,241 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(documentStatistics('word '.repeat(200), 0).minutes === 1, 'Invalid reading speed should use the default');
     assert(documentStatistics('中文测试').words === 4, 'Chinese characters should count separately');
     assert(documentStatistics('one\r\ntwo\r\n').lines === 3 && documentStatistics('').lines === 1, 'Source line endings or empty document line count changed');
+  });
+  await test('Mixed inline images retain their size and neighboring rich text during native editing', async () => {
+    const image = '![alt](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==)';
+    const source = 'Before **bold** ' + image + ' after *italic*.';
+    editor.setValue(source); cursor(1); await frame();
+    let preview = parent.querySelector<HTMLElement>('.cm-inline-image')!;
+    assert(preview && parent.querySelector('.cm-md-strong')?.textContent === 'bold', 'Mixed paragraph fell back to a whole-block widget');
+    const img = preview.querySelector('img')!;
+    assert(img.getBoundingClientRect().width <= 2, 'Intrinsic image was expanded to paragraph width');
+    preview.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); await frame();
+    assert(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'alt', 'Image click did not select only its alt text');
+    assert(parent.querySelector('.cm-inline-image-source') && parent.querySelector('.cm-inline-image img'), 'Active image lost its source or preview');
+    insert('changed'); await frame(); cursor(1); await frame();
+    assert(editor.value === source.replace('![alt]', '![changed]') && parent.querySelector('.cm-md-emphasis')?.textContent === 'italic', 'Image edit changed neighboring source');
+    undo(view); assert(editor.value === source, 'Inline image edit cannot undo');
+  });
+  await test('Reference images resolve across the document and follow definition edits without rewriting source', async () => {
+    const source = 'Before ![label][FIGURE] after.\n\n![standalone][figure]\n\n[figure]: first.png "Title"\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const previews = Array.from(parent.querySelectorAll<HTMLImageElement>('.cm-image-preview img'));
+    assert(previews.length === 2 && previews.every(image => image.getAttribute('src') === 'first.png' && image.title === 'Title'), 'Reference image lost definition context');
+    assert(parent.querySelector('.cm-reference-definition')?.textContent === '[figure]: first.png "Title"', 'Reference definition disappeared');
+    const from = source.indexOf('first.png'); view.dispatch({ changes: { from, to: from + 9, insert: 'second.png' } }); await frame();
+    assert(Array.from(parent.querySelectorAll('.cm-image-preview img')).every(image => image.getAttribute('src') === 'second.png'), 'Definition edit did not update previews');
+    assert(editor.value.includes('![label][FIGURE]') && editor.value.includes('![standalone][figure]'), 'Reference syntax was rewritten');
+    const preview = parent.querySelector<HTMLElement>('.cm-inline-image')!;
+    assert(editor.imageAt(preview)?.source === '![label][FIGURE]', 'Inline reference image lost its contextual source range');
+    assert(editor.handleImageAction('image:zoom:50'), 'Inline reference image missed its image command');
+    assert(editor.value.includes('<img src="second.png"') && editor.value.includes('zoom:50%') && editor.value.includes('![standalone][figure]'), 'Image command affected another reference or lost its resolved path');
+  });
+  await test('Inline HTML image dimensions and broken-image source stay local to the image', async () => {
+    const source = 'Before <img src="missing.png" width="120" height="60" alt="sample"> after **bold**.';
+    editor.setValue(source); cursor(1); await frame();
+    const image = parent.querySelector<HTMLImageElement>('.cm-inline-image img')!;
+    assert(image?.style.width === '120px' && image.style.height === '60px', 'HTML inline image dimensions changed');
+    image.dispatchEvent(new Event('error')); await frame();
+    const fallback = parent.querySelector<HTMLElement>('.cm-inline-image .cm-image-fallback')!;
+    assert(!fallback.hidden && fallback.textContent?.includes('<img'), 'Failed image lost editable source fallback');
+    assert(parent.querySelector('.cm-md-strong')?.textContent === 'bold', 'Failed image removed neighboring format');
+  });
+  await test('Footnotes edit locally while neighboring formats and definitions retain native text', async () => {
+    const source = 'Before **bold**[^note] after.\n\n[^note]: Footnote *body*.\n\nTail';
+    editor.setValue(source); cursor(1); await frame();
+    const note = parent.querySelector<HTMLElement>('.cm-inline-footnote')!;
+    assert(note?.textContent === 'note' && parent.querySelector('.cm-md-strong')?.textContent === 'bold', 'Footnote forced whole-paragraph source');
+    note.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true, cancelable: true }));
+    assert(view.state.selection.main.head === 1, 'Footnote right-click changed the existing selection');
+    const backref = parent.querySelector<HTMLElement>('.cm-footnote-backref');
+    assert(backref, 'Footnote definition lost its back-reference action');
+    backref.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    assert(view.state.selection.main.head === source.indexOf('[^note]'), 'Footnote back-reference missed its source reference');
+    note.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); await frame();
+    assert(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'note', 'Footnote click selected surrounding text');
+    const at = source.indexOf('Footnote'); cursor(at); insert('New '); await frame();
+    assert(editor.value.includes('[^note]: New Footnote *body*.') && parent.querySelector('.cm-reference-definition .cm-md-emphasis')?.textContent === 'body', 'Definition edit lost structure or inline rendering');
+    undo(view); assert(editor.value === source, 'Footnote definition edit cannot undo');
+  });
+  const footnoteTooltip = async (target: HTMLElement) => {
+    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    for (let n = 0; n < 50; n++) {
+      const tooltip = document.querySelector<HTMLElement>('.cm-footnote-tooltip');
+      if (tooltip) return tooltip;
+      // WebKit can deliver a pending layout scroll just after the first hover.
+      // Re-enter after it settles; scrolling correctly dismisses the preview.
+      if (n && n % 10 === 0) target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    throw Error('Footnote preview did not open');
+  };
+  await test('Paragraph and table footnote hover previews share rich definitions and never change the selection or source', async () => {
+    const source = 'Before **bold**[^note] after.\n\n| A | B |\n| --- | --- |\n| same[^note] | other |\n\n[^note]: First *italic* **strong** and `code`, [reference][site] with ![alt][figure] and $x^2$.\n\n[site]: https://example.com/ "Title"\n[figure]: sample.svg\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const selected = view.state.selection.main.head;
+    for (const selector of ['.cm-inline-footnote:not(.md-table-footnote)', '.md-table-footnote']) {
+      const target = parent.querySelector<HTMLElement>(selector)!, tooltip = await footnoteTooltip(target);
+      assert(tooltip.querySelector('em')?.textContent === 'italic' && tooltip.querySelector('strong')?.textContent === 'strong' && tooltip.querySelector('code')?.textContent === 'code', 'Footnote hover lost inline formatting');
+      assert(tooltip.querySelector('a')?.getAttribute('href') === 'https://example.com/' && tooltip.querySelector('a')?.title === 'Title' && tooltip.querySelector('img')?.getAttribute('src') === 'sample.svg', 'Footnote preview lost whole-document reference definitions');
+      assert(tooltip.querySelector('.md-inline-math')?.textContent === 'x^2' && !tooltip.querySelector('.footnote-backref,.footnotes-list'), 'Footnote preview omitted math or included export-only navigation');
+      assert(Array.from(tooltip.querySelectorAll<HTMLElement>('a,[tabindex]')).every(node => node.tabIndex < 0), 'Passive preview added keyboard tab stops');
+      assert(target.getAttribute('aria-describedby') === tooltip.id && view.state.selection.main.head === selected && editor.value === source, 'Hover stole the selection or changed Markdown');
+      target.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+      assert(!document.querySelector('.cm-footnote-tooltip') && !target.hasAttribute('aria-describedby'), 'Leaving a reference retained its tooltip or accessibility link');
+    }
+  });
+  await test('Open footnote previews refresh on definition edits and undo, then close when the definition disappears', async () => {
+    const source = 'Before[^note] after.\n\n[^note]: Original *body*.\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const target = parent.querySelector<HTMLElement>('.cm-inline-footnote')!; await footnoteTooltip(target);
+    const from = source.indexOf('Original'); view.dispatch({ changes: { from, to: from + 8, insert: 'Updated' }, userEvent: 'input' }); await frame();
+    assert(document.querySelector('.cm-footnote-tooltip')?.textContent?.includes('Updated body'), 'Open preview showed stale definition content: ' + JSON.stringify({tooltip: document.querySelector('.cm-footnote-tooltip')?.textContent, reference: target.outerHTML, connected: target.isConnected, source: editor.value}));
+    undo(view); await frame(); assert(document.querySelector('.cm-footnote-tooltip')?.textContent?.includes('Original body') && editor.value === source, 'Preview or source did not follow undo');
+    const definition = editor.value.indexOf('[^note]:'); view.dispatch({ changes: { from: definition, to: definition + '[^note]: Original *body*.'.length, insert: '' } }); await frame();
+    assert(!document.querySelector('.cm-footnote-tooltip'), 'Deleted definition retained an obsolete preview');
+  });
+  await test('Footnote hover is passive, closes on editing, Escape, scrolling and source mode, and ignores missing definitions', async () => {
+    const source = 'Before[^note] and missing[^missing].\n\n[^note]: Body.\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const target = () => parent.querySelector<HTMLElement>('[data-footnote-label="note"]')!;
+    await footnoteTooltip(target()); document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); assert(!document.querySelector('.cm-footnote-tooltip'), 'Escape outside the editor left the footnote preview open');
+    await footnoteTooltip(target()); view.scrollDOM.dispatchEvent(new Event('scroll')); assert(!document.querySelector('.cm-footnote-tooltip'), 'Scrolling retained a detached preview');
+    await footnoteTooltip(target()); target().dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true, cancelable: true }));
+    assert(!document.querySelector('.cm-footnote-tooltip') && editor.value === source, 'Right mouse down left the passive preview open or edited source');
+    const missing = parent.querySelector<HTMLElement>('[data-footnote-label="missing"]')!;
+    missing.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 260));
+    assert(!document.querySelector('.cm-footnote-tooltip'), 'Missing definition produced an empty tooltip');
+    missing.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    await footnoteTooltip(target()); editor.setSourceMode(true); await frame(); assert(!document.querySelector('.cm-footnote-tooltip'), 'Source mode retained a rich preview');
+  });
+  await test('Footnote preview isolates document metadata, keeps HTML passive and fits the viewport at application zoom', async () => {
+    const source = '---\ntitle: Metadata stays outside the preview\n---\n\nBefore[^constructor].\n\n[^constructor]: Safe **body** <span id="duplicate" contenteditable autofocus tabindex="0">content</span> <img src="missing.svg" onerror="window.__footnoteExecuted=true"> <input autofocus> <script>window.__footnoteExecuted=true</script> ' + 'long text '.repeat(60) + '\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    document.body.style.zoom = '1.5';
+    try {
+      const target = parent.querySelector<HTMLElement>('.cm-inline-footnote')!, tooltip = await footnoteTooltip(target);
+      assert(tooltip.textContent?.includes('Safe body') && !tooltip.textContent?.includes('Metadata stays'), 'Metadata leaked into the footnote preview');
+      assert(!tooltip.querySelector('script,input,[onerror],[id],[contenteditable],[autofocus],[tabindex="0"]') && !(window as any).__footnoteExecuted, 'Hover activated inline HTML or duplicated document anchors');
+      const rect = tooltip.getBoundingClientRect();
+      assert(rect.left >= 7 && rect.right <= window.innerWidth - 7 && rect.top >= 7 && rect.bottom <= window.innerHeight - 7, 'Zoomed preview escaped the viewport: ' + JSON.stringify(rect));
+      assert(editor.value === source, 'Passive HTML filtering changed saved Markdown');
+    } finally { document.body.style.zoom = ''; key('Escape'); }
+  });
+  await test('Setext underlines apply to the last line in editor, outline and export', async () => {
+    const source = 'First line\nSecond line\n-----------\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    assert(parent.querySelector('.cm-heading')?.textContent === 'Second line', 'Setext editor styled multiple lines as one heading');
+    const output = renderDocument(source);
+    assert(output.headings.length === 1 && output.headings[0].text === 'Second line' && output.headings[0].line === 1, 'Setext outline used the wrong range');
+    assert(/<p>First line<\/p>/.test(output.html) && /<h2[^>]*>Second line<\/h2>/.test(output.html), 'Setext export differs from editor');
+    assert(editor.value === source, 'Rendering changed the saved source');
+  });
+  await test('Media and footnote syntax inside code and TeX remains literal', async () => {
+    const source = '`![alt](missing.png) [^note]`\n\n```md\n[figure]: missing.png\n[^note]: literal\n```\n\n$\\text{![alt](missing.png) [^note]}$\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    assert(!parent.querySelector('.cm-image-preview,.cm-inline-footnote,.cm-reference-definition'), 'Code syntax was interpreted as rich media or a definition');
+    assert(editor.value === source, 'Code syntax changed');
+  });
+  await test('Table images edit only their source while neighboring formats, math and undo survive', async () => {
+    const source = '| A | B |\n| --- | --- |\n| Before **bold** ![alt](sample.svg) after | $x^2$ |\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const cell = parent.querySelector<HTMLElement>('td[data-col="0"]')!;
+    cellSelection(cell, 2); await frame();
+    assert(cell.querySelector('.cm-md-strong')?.textContent === 'bold' && cell.querySelector('.md-table-image-preview img'), 'Focusing image cell exposed the entire source');
+    cell.querySelector('.md-table-image-preview')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); await frame();
+    assert(window.getSelection()?.toString() === 'alt' && cell.querySelector('.md-table-image-preview img'), 'Table image click lost its alt selection or preview');
+    const data = new DataTransfer(); data.setData('text/plain', 'new alt');
+    cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); await frame();
+    assert(editor.value === source.replace('![alt]', '![new alt]') && parent.querySelector('.md-table-math-preview'), 'Table image edit changed neighbors or included rendered labels');
+    assert(editor.handleTableAction('undo'), 'Table image edit missed table undo'); await frame();
+    assert(editor.value === source, 'Table image edit cannot undo');
+  });
+  await test('Table image commands map escaped cells precisely and preserve padding, dimensions and undo', async () => {
+    const image = '![a\\|b](sample.svg "x\\|y")';
+    const source = 'Before\n\n| A   | B |\n| :--- | ---: |\n| left \\| side<BR />Before **bold** ' + image + ' after   | untouched  |\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const other = parent.querySelector<HTMLElement>('td[data-col="1"]')!; cellSelection(other, 0, 3);
+    const range = editor.imageAt(parent.querySelector<HTMLElement>('.md-table-image-preview img')!)!;
+    assert(range?.from === source.indexOf(image) && range.rawSource === image && standaloneImage(range.source)?.alt === 'a|b', 'Escapes or line breaks shifted the image range');
+    assert(window.getSelection()?.toString() === 'unt', 'Target detection changed another cell selection');
+    editor.handleImageAction('image:markdown'); await frame();
+    assert(editor.value === source, 'Unchanged image syntax rewrote its escaped source or table padding');
+    editor.handleImageAction('image:zoom:50'); await frame();
+    const updated = '<img src="sample.svg" alt="a&#124;b" title="x&#124;y" style="zoom:50%;" />';
+    assert(editor.value === source.replace(image, updated), 'Zoom changed other cells, table layout or image pipe values: ' + editor.value);
+    assert(['50%', '0.5'].includes(parent.querySelector<HTMLImageElement>('.md-table-image-preview img')?.style.zoom || '') && window.getSelection()?.toString() === updated, 'Zoom lost preview dimensions or source selection: ' + JSON.stringify({zoom: parent.querySelector<HTMLImageElement>('.md-table-image-preview img')?.style.zoom, selection: window.getSelection()?.toString(), active: document.activeElement?.outerHTML}));
+    assert(document.activeElement?.matches('td[data-col="0"]'), 'Zoom did not focus its target cell');
+    parent.querySelector<HTMLElement>('td[data-col="1"]')!.focus(); await frame();
+    assert(editor.value === source.replace(image, updated), 'Leaving an unchanged image cell normalized its original line-break syntax or table padding');
+    undo(view); await frame(); assert(editor.value === source, 'Table image command cannot undo exactly');
+  });
+  await test('Table reference images and fallback HTML cells retain exact image action targets', async () => {
+    const source = '| A | B |\n| --- | --- |\n| ![one][figure] then ![two][figure] | other |\n| <span>Before</span> ![fallback](sample.svg) after | other |\n\n[figure]: sample.svg "Title"\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const previews = parent.querySelectorAll<HTMLElement>('td[data-row="1"] .md-table-image-preview');
+    assert(previews.length === 2 && editor.imageAt(previews[1])?.source === '![two][figure]', 'Repeated references lost their separate targets');
+    editor.handleImageAction('image:zoom:50'); await frame();
+    assert(editor.value === source.replace('![two][figure]', '<img src="sample.svg" alt="two" title="Title" style="zoom:50%;" />'), 'Reference action changed another image or its shared definition');
+    undo(view); await frame(); cursor(source.length); await frame();
+    const fallback = parent.querySelector<HTMLElement>('td[data-row="2"] img')!;
+    assert(fallback && editor.imageAt(fallback)?.source === '![fallback](sample.svg)', 'Rendered HTML fallback image lacks a precise source range');
+    editor.handleImageAction('image:html'); await frame();
+    assert(editor.value === source.replace('![fallback](sample.svg)', '<img src="sample.svg" alt="fallback" />'), 'Fallback image conversion damaged surrounding HTML');
+  });
+  await test('Removing a sole table image keeps an editable empty cell and stale file actions cannot overwrite newer text', async () => {
+    const source = '| A | B |\n| --- | --- |\n|  ![alt](sample.svg)   | other |\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const range = editor.imageAt(parent.querySelector<HTMLElement>('.md-table-image-preview')!)!;
+    assert(editor.replaceImage(range, '', true), 'Image removal was rejected'); await frame();
+    assert(editor.value === source.replace('![alt](sample.svg)', '') && document.activeElement?.matches('td[data-col="0"]'), 'Image removal changed table spacing or lost its empty cell focus');
+    undo(view); await frame(); assert(editor.value === source, 'Image removal cannot undo');
+    const old = editor.imageAt(parent.querySelector<HTMLElement>('.md-table-image-preview')!)!;
+    view.dispatch({ changes: { from: 0, insert: 'Before\n\n' } }); await frame();
+    assert(!editor.replaceImage(old, '![alt](copied.svg)') && editor.value === 'Before\n\n' + source, 'A delayed image action overwrote newer content');
+  });
+  await test('Table footnotes edit locally, keep neighboring media and return from definitions to the native cell caret', async () => {
+    const source = '| A | B |\n| --- | --- |\n| Before **bold**[^note] after | ![alt][figure] and [^second] |\n| `[^literal]` $\\text{[^math]}$ | other |\n\n[^note]: Footnote *body*.\n\n[^second]: Second.\n\n[figure]: sample.svg\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const cell = parent.querySelector<HTMLElement>('td[data-row="1"][data-col="0"]')!; cellSelection(cell, 2); await frame();
+    assert(cell.querySelector('.cm-md-strong')?.textContent === 'bold' && cell.querySelector('sup.md-table-footnote')?.textContent === 'note', 'Footnote cell exposed neighboring source on focus');
+    assert(parent.querySelectorAll('.md-table-footnote').length === 2 && parent.querySelector('.md-table-image-preview'), 'Footnotes in code/TeX were interpreted, or a neighboring reference image was lost');
+    cell.querySelector('.md-table-footnote')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); await frame();
+    assert(window.getSelection()?.toString() === 'note' && cell.querySelector('.cm-md-strong')?.textContent === 'bold', 'Footnote click failed to select only its local label');
+    const data = new DataTransfer(); data.setData('text/plain', 'renamed');
+    cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); await frame();
+    assert(editor.value === source.replace('**bold**[^note]', '**bold**[^renamed]'), 'Footnote label edit changed definitions or neighboring cells');
+    undo(view); await frame(); assert(editor.value === source, 'Table footnote edit cannot undo');
+    cursor(source.length); await frame(); parent.querySelector<HTMLElement>('.cm-footnote-backref')!.click(); await frame();
+    assert(document.activeElement?.matches('td[data-row="1"][data-col="0"]') && cell.querySelector('.cm-md-marker')?.textContent?.includes('[^'), 'Footnote return did not focus its editable table reference');
+    assert(editor.value === source, 'Footnote return changed source');
+  });
+  await test('Native automatic replacements cannot rewrite table image attributes, code or TeX', async () => {
+    const source = '| A | B |\n| --- | --- |\n| <img src="sample.svg"> | `say "hello"` |\n| $\\text{"x"}$ | plain "text" |\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const replacement = async (row: number, col: number, needle: string, inputType = 'insertReplacementText') => {
+      const cell = parent.querySelector<HTMLElement>(`td[data-row="${row}"][data-col="${col}"]`)!;
+      const at = tableText(cell).indexOf(needle); cellSelection(cell, at, at + 1); await frame();
+      const range = window.getSelection()!.getRangeAt(0).cloneRange();
+      const event = new InputEvent('beforeinput', { inputType, data: '“', bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'getTargetRanges', { value: () => [range] }); cell.dispatchEvent(event); return event.defaultPrevented;
+    };
+    assert(await replacement(1, 0, '"'), 'Native smart quotes could rewrite an HTML image attribute');
+    assert(await replacement(1, 1, '"'), 'Native replacement could rewrite inline code');
+    assert(await replacement(2, 0, '"'), 'Native replacement could rewrite TeX');
+    assert(!await replacement(2, 1, '"'), 'Plain table text lost native correction');
+    assert(!await replacement(1, 0, '"', 'insertCompositionText'), 'Source protection blocked IME composition');
+    assert(editor.value === source, 'Source protection changed document contents');
+  });
+  await test('Table reference images follow document definitions and HTML dimensions remain intact', async () => {
+    const source = '| A | B |\n| --- | --- |\n| ![ref][figure] | <img src="sized.svg" width="60" height="30"> |\n\n[figure]: first.svg\n\nTail';
+    editor.setValue(source); cursor(source.length); await frame();
+    const image = () => parent.querySelector<HTMLImageElement>('td[data-col="0"] .md-table-image-preview img')!;
+    assert(image()?.getAttribute('src') === 'first.svg', 'Table image lost document reference context');
+    const sized = parent.querySelector<HTMLImageElement>('td[data-col="1"] .md-table-image-preview img')!;
+    assert(sized?.style.width === '60px' && sized.style.height === '30px', 'Table HTML image lost dimensions');
+    const at = editor.value.indexOf('first.svg'); view.dispatch({ changes: { from: at, to: at + 9, insert: 'second.svg' } }); await frame();
+    assert(image()?.getAttribute('src') === 'second.svg' && editor.value.includes('![ref][figure]'), 'Table reference image did not refresh or rewrote source');
   });
   await test('Spelling skips code and links by default and respects the explicit preference', async () => {
     editor.setValue('Prose `mispellt` and [label](https://mispellt.example)\n\n```java\nmispellt\n```'); cursor(2); await frame();
@@ -136,6 +376,128 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(editor.value === '- List item\n  Continuation\n- Next', 'Enter from a soft line did not continue the list');
     editor.setValue('```java\n  code\n```'); cursor(editor.value.indexOf('code') + 4); key('Enter', { shiftKey: true }); insert('next');
     assert(editor.value.includes('  code\n  next'), 'Shift Enter inside code lost indentation');
+  });
+  await test('List Tab moves the item from inside its text, preserves the caret and undoes as one step', () => {
+    const source = '- parent\n- child';
+    editor.setValue(source); cursor(source.indexOf('child') + 2);
+    key('Tab');
+    assert(editor.value === '- parent\n  - child' && view.state.selection.main.head === source.indexOf('child') + 4, 'Tab inserted whitespace into the item text or lost the caret');
+    undo(view); assert(editor.value === source, 'List indentation did not undo as one step');
+    redo(view); key('Tab', { shiftKey: true }); assert(editor.value === source, 'Shift Tab did not restore the parent level');
+    editor.setValue('- first'); cursor(editor.value.length); key('Tab');
+    assert(editor.value === '- first\t', 'The first item without a preceding sibling did not retain native literal Tab behavior');
+    editor.configure({ codeIndentSize: 2 }); editor.setValue('```text\nabc\n```'); cursor(editor.value.indexOf('abc') + 1); key('Tab');
+    assert(editor.value.includes('a  bc'), 'List indentation changed code Tab preferences');
+    editor.setSourceMode(true); editor.configure({ indentSize: 4 }); editor.setValue(source); cursor(source.indexOf('child') + 2); key('Tab');
+    assert(editor.value === '- parent\n- ch    ild', 'Source mode unexpectedly used live list indentation');
+  });
+  await test('List indentation retains descendants, existing spacing, reverse selections and an excluded boundary row', () => {
+    const source = '- parent\n- branch\n  - leaf\n- sibling';
+    editor.setValue(source);
+    view.dispatch({ selection: { anchor: source.indexOf('- sibling'), head: source.indexOf('branch') } });
+    key('Tab');
+    assert(editor.value === '- parent\n  - branch\n    - leaf\n- sibling', 'Indentation omitted descendants or included the next unselected item');
+    assert(view.state.selection.main.anchor > view.state.selection.main.head, 'Indentation reversed a backward selection');
+    undo(view); assert(editor.value === source, 'Multi-line indentation did not undo together');
+    editor.setValue('- parent\n    - existing\n- next'); cursor(editor.value.length); key('Tab');
+    assert(editor.value === '- parent\n    - existing\n    - next', 'Tab ignored existing sibling indentation');
+    editor.setValue('- parent\n  - child\n    - leaf'); cursor(editor.value.indexOf('leaf')); key('Tab', { shiftKey: true });
+    assert(editor.value === '- parent\n  - child\n  - leaf', 'Shift Tab removed more than one nesting level');
+    editor.setSourceMode(true); editor.configure({ indentSize: 2 }); editor.setValue('one\ntwo\nthree');
+    view.dispatch({ selection: { anchor: 0, head: 8 } }); key('Tab');
+    assert(editor.value === '  one\n  two\nthree', 'A selection ending at the next line start indented that unselected line');
+  });
+  await test('Empty list and quote Enter creates a real paragraph at the remaining parent level', async () => {
+    for (const [source, expected] of [
+      ['- item', '- item\n\nNEXT'], ['9. item', '9. item\n\nNEXT'],
+      ['- [x] done', '- [x] done\n\nNEXT'], ['> item', '> item\n\nNEXT'],
+      ['- parent\n  - child', '- parent\n  - child\n  \n  NEXT'],
+      ['> > item', '> > item\n>\n> NEXT'],
+    ]) {
+      editor.setValue(source); cursor(editor.value.length); key('Enter');
+      const emptyItem = editor.value;
+      key('Enter'); const paragraph = editor.value;
+      undo(view); assert(editor.value === emptyItem, 'Exiting an empty item could not undo separately');
+      redo(view); assert(editor.value === paragraph, 'Redo lost the empty-item exit');
+      insert('NEXT'); await frame();
+      assert(editor.value === expected, 'Empty item lost the paragraph boundary or parent level: ' + JSON.stringify(editor.value));
+      assert(!parent.querySelector('.md-block-widget'), 'Parent continuation fell back to a whole-block source widget');
+    }
+  });
+  await test('Enter replaces forward and backward text selections with a list item or quote row', async () => {
+    const cases = [
+      ['- alpha BETA omega\n- next', '- alpha \n-  omega\n- next'],
+      ['  - alpha BETA omega', '  - alpha \n  -  omega'],
+      ['9) alpha BETA omega', '9) alpha \n10)  omega'],
+      ['- [x] alpha BETA omega', '- [x] alpha \n- [ ]  omega'],
+      ['> > alpha BETA omega', '> > alpha \n> >  omega'],
+    ];
+    for (const [source, expected] of cases) for (const reverse of [false, true]) {
+      editor.setValue(source); const from = source.indexOf('BETA'), to = from + 4;
+      view.dispatch({ selection: { anchor: reverse ? to : from, head: reverse ? from : to } }); key('Enter');
+      assert(editor.value === expected, 'Selected text Enter lost its structural prefix: ' + source);
+      const head = view.state.selection.main.head;
+      const body = editor.value.indexOf('omega');
+      assert(view.state.selection.main.empty && head <= body && !editor.value.slice(head, body).trim(), 'Enter left the caret in the marker or on the previous item');
+      undo(view); assert(editor.value === source, 'Selection split did not undo in one step');
+      redo(view); assert(editor.value === expected, 'Selection split did not redo in one step');
+    }
+    editor.setValue('- alpha BETA omega'); view.dispatch({ selection: { anchor: 8, head: 12 } }); key('Enter', { shiftKey: true });
+    assert(editor.value === '- alpha \n   omega', 'Selected Shift Enter did not retain a soft list continuation');
+    await frame();
+  });
+  await test('List Enter preserves tab separators, task reset and repeated-number preferences', () => {
+    for (const [source, expected] of [
+      ['-\talpha', '-\talpha\n-\t'],
+      ['1)\talpha', '1)\talpha\n2)\t'],
+      ['-\t[x]\talpha', '-\t[x]\talpha\n-\t[ ]\t'],
+      ['1. [x] alpha', '1. [x] alpha\n2. [ ] '],
+    ]) {
+      editor.setValue(source); cursor(source.length); key('Enter');
+      assert(editor.value === expected, 'List Enter changed the original whitespace or lost the list: ' + source);
+      undo(view); assert(editor.value === source, 'Tab-separated list split did not undo');
+    }
+    editor.configure({ orderedDelimiter: 'repeat' }); editor.setValue('3)\talpha BETA omega');
+    const from = editor.value.indexOf('BETA'); view.dispatch({ selection: { anchor: from, head: from + 4 } }); key('Enter');
+    assert(editor.value === '3)\talpha \n3)\t omega', 'Selection split ignored the repeated-number preference');
+  });
+  await test('List-start Backspace joins the preceding sibling or parent without losing indentation', async () => {
+    for (const [source, expected] of [
+      ['- parent\n- child\n- next', '- parent\n\n  child\n\n- next'],
+      ['- parent\n  - child\n- next', '- parent\n  \n  child\n- next'],
+      ['- parent\n  - first\n  - child\n    - grand\n  - sibling\n- next', '- parent\n  - first\n  \n    child\n    - grand\n  \n  - sibling\n- next'],
+      ['10. parent\n11. child\n12. next', '10. parent\n\n    child\n\n12. next'],
+      ['- [x] parent\n- [ ] child\n- next', '- [x] parent\n\n  child\n\n- next'],
+      ['-\tparent\n-\tchild\n-\tnext', '-\tparent\n\n \tchild\n\n-\tnext'],
+    ]) {
+      editor.setValue(source); cursor(source.indexOf('child')); key('Backspace');
+      assert(editor.value === expected, 'List marker removal lost the paragraph owner: ' + JSON.stringify(editor.value));
+      assert(view.state.selection.main.head === expected.indexOf('child'), 'List marker removal moved the caret away from its body');
+      await frame(); assert(!parent.querySelector('.md-block-widget'), 'Removing a simple list marker unfolded the entire block');
+      undo(view); assert(editor.value === source, 'List paragraph join did not undo in one step');
+      redo(view); assert(editor.value === expected, 'List paragraph join did not redo');
+    }
+  });
+  await test('Removing the first list marker promotes its own children and preserves later siblings', async () => {
+    for (const [source, expected] of [
+      ['- child\n- next', 'child\n\n- next'],
+      ['- child\n  - grand\n- next', 'child\n- grand\n\n- next'],
+      ['- child\n  continuation\n  - grand\n    deeper\n- next', 'child\ncontinuation\n- grand\n  deeper\n\n- next'],
+    ]) {
+      editor.setValue(source); cursor(source.indexOf('child')); key('Backspace');
+      assert(editor.value === expected, 'First-item marker removal retained stale indentation or changed a later sibling: ' + JSON.stringify(editor.value));
+      await frame(); assert(!parent.querySelector('.md-block-widget'), 'Promoted children fell back to a source block');
+      undo(view); assert(editor.value === source, 'First-item marker removal did not undo');
+    }
+    editor.setValue('- parent\n- child'); editor.setSourceMode(true); cursor(editor.value.indexOf('child')); key('Backspace');
+    assert(editor.value === '- parent\n-child', 'Live list marker handling changed source-mode Backspace');
+  });
+  await test('Backspace at a nested quote start removes one level and keeps text and undo intact', () => {
+    const source = '> > item\n\nAfter';
+    editor.setValue(source); cursor(source.indexOf('item')); key('Backspace');
+    assert(editor.value === '> item\n\nAfter' && view.state.selection.main.head === 2, 'Nested quote Backspace deleted text or more than one quote level');
+    undo(view); assert(editor.value === source, 'Quote outdent could not undo');
+    redo(view); key('Backspace'); assert(editor.value === 'item\n\nAfter', 'Second quote Backspace did not remove the remaining level');
   });
   await test('A Markdown table header followed by Enter becomes a focused editable table', async () => {
     editor.setValue('Before\n\n| Name \\| alias | Count |'); cursor(editor.value.length); key('Enter'); await frame();
@@ -442,7 +804,7 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     editor.setValue('9. ninth'); cursor(editor.value.length); key('Enter');
     assert(editor.value === '9. ninth\n10. ', 'Ordered continuation did not increment');
     assert(parent.querySelectorAll('.cm-native-list').length === 2, 'Empty new list item exposed whole-list source');
-    key('Enter'); assert(editor.value === '9. ninth\n', 'Empty list item did not exit');
+    key('Enter'); assert(editor.value === '9. ninth\n\n', 'Empty list item did not create a separate paragraph');
     editor.setValue('- [x] done'); cursor(editor.value.length); key('Enter');
     assert(editor.value === '- [x] done\n- [ ] ', 'Task continuation kept completed state');
     key('Backspace'); assert(editor.value === '- [x] done\n', 'Backspace did not remove empty task marker');
@@ -789,7 +1151,7 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(parent.querySelectorAll('th').length === 3 && parent.querySelectorAll('tr').length === 4 && editor.value.includes('| one | two |  |'), 'Grid resize lost data or dimensions');
     assert(editor.value.includes('| :--- | ---: | --- |'), 'Grid resize lost column alignment');
     parent.querySelector<HTMLButtonElement>('[data-action="resize"]')!.click();
-    const columns = parent.querySelector<HTMLInputElement>('.md-table-resize [aria-label="列数"]')!, rows = parent.querySelector<HTMLInputElement>('.md-table-resize [aria-label="行数"]')!;
+    const columns = parent.querySelector<HTMLInputElement>('.md-table-resize [data-dimension="columns"]')!, rows = parent.querySelector<HTMLInputElement>('.md-table-resize [data-dimension="rows"]')!;
     (document.activeElement as HTMLElement).blur(); await frame();
     assert(!columns.closest<HTMLElement>('.md-table-resize')!.hidden, 'A transient native focus loss closed the panel before its input could receive focus');
     columns.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); await frame();
@@ -799,7 +1161,7 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(parent.querySelectorAll('th').length === 7 && parent.querySelectorAll('tr').length === 12 && editor.value.includes('Before') && editor.value.includes('After'), 'Numeric resize did not exceed the grid or damaged adjacent paragraphs');
     undo(view); await frame(); assert(parent.querySelectorAll('th').length === 3 && parent.querySelectorAll('tr').length === 4, 'Resize cannot undo');
     parent.querySelector<HTMLButtonElement>('[data-action="resize"]')!.click();
-    const unchanged = parent.querySelector<HTMLInputElement>('.md-table-resize [aria-label="行数"]')!;
+    const unchanged = parent.querySelector<HTMLInputElement>('.md-table-resize [data-dimension="rows"]')!;
     unchanged.focus(); unchanged.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await frame();
     assert(document.activeElement?.matches('td,th'), 'Accepting unchanged dimensions left focus in a hidden field');
     parent.querySelector<HTMLButtonElement>('[data-action="resize"]')!.click();
@@ -855,7 +1217,7 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     parent.querySelector<HTMLElement>('[data-row="1"][data-col="0"]')!.focus();
     parent.querySelector<HTMLButtonElement>('[data-action="resize"]')!.click(); await frame();
   }
-  const input = parent.querySelector<HTMLInputElement>(`.md-table-resize [aria-label="${field}"]`)!;
+  const input = parent.querySelector<HTMLInputElement>(`.md-table-resize [data-dimension="${field === '列数' || field === 'Columns' ? 'columns' : 'rows'}"]`)!;
   const box = input.getBoundingClientRect();
   return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
 };

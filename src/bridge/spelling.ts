@@ -1,3 +1,4 @@
+import { uiText as tr } from '../shared/ui-language';
 import { loadModule, Hunspell, HunspellFactory } from 'hunspell-asm';
 import { checkSpellBatch, dictionaryLanguage, normalizeSpellWord, spellMode, SpellState } from '../shared/spellcheck';
 type Invoke = (method: string, ...args: any[]) => Promise<any>;
@@ -18,7 +19,7 @@ export class Spelling {
     const chosen=spellMode(mode), language=dictionaryLanguage(chosen === 'auto'||chosen === 'off' ? navigator.language : chosen);
     if(chosen !== 'off' && !await this.invoke('dictionary.exists',language)) {
       if(!prompt)return this.announce();
-      const answer=await this.invoke('dialog.showMessageBox',{message:'下载离线拼写词典？',detail:'只下载 '+language+' 词典。词典用于拼写检查，文稿内容不会上传。也可在偏好设置中导入本地词典。',buttons:['下载词典','取消'],cancelId:1});
+      const answer=await this.invoke('dialog.showMessageBox',{message:tr('下载离线拼写词典？','Download an offline spelling dictionary?'),detail:tr('只下载 '+language+' 词典。词典用于拼写检查，文稿内容不会上传。也可在偏好设置中导入本地词典。','Only the '+language+' dictionary will be downloaded. It is used for spelling checks; document content is never uploaded. You can also import a local dictionary in Preferences.'),buttons:[tr('下载词典','Download Dictionary'),tr('取消','Cancel')],cancelId:1});
       if(answer.response!==0)return this.announce();
       const installed=await this.invoke('dictionary.install',language);if(installed?.error)throw Error(installed.error);
     }
@@ -27,7 +28,7 @@ export class Spelling {
   async checker(language: string): Promise<Hunspell> {
     const lang=dictionaryLanguage(language), existing=this.checkers.get(lang);
     if(existing){this.checkers.delete(lang);this.checkers.set(lang,existing);return existing.checker;}
-    if(!await this.invoke('dictionary.exists',lang)) throw Error('尚未安装 '+lang+' 拼写词典，请从偏好设置下载或导入。');
+    if(!await this.invoke('dictionary.exists',lang)) throw Error(tr('尚未安装 '+lang+' 拼写词典，请从偏好设置下载或导入。','The '+lang+' spelling dictionary is not installed. Download or import it in Preferences.'));
     const factory=await(this.factory ||= loadModule());if(this.checkers.has(lang))return this.checkers.get(lang)!.checker;
     const bytes: string[]=await this.invoke('dictionary.read',lang);
     const paths=bytes.map(b64=>factory.mountBuffer(Uint8Array.from(atob(b64),c=>c.charCodeAt(0))));
@@ -66,7 +67,7 @@ export class Spelling {
       case 'setting.getUserDict':return Array.from(new Set(Object.values(this.users).flat())).sort();
       case 'setting.addUserDict':return this.handle('spellcheck.learn',args);
       case 'setting.removeUserDict':return this.handle('spellcheck.learn',[args[0],true]);
-      default:throw Error('Unknown spelling method: '+method);
+      default:throw Error(tr('未知拼写操作：','Unknown spelling method: ')+method);
     }
   }
   invalidate(language:string):void{const old=this.checkers.get(language);if(old){old.checker.dispose();void this.factory?.then(factory=>old.paths.forEach(p=>factory.unmount(p)));this.checkers.delete(language);}}

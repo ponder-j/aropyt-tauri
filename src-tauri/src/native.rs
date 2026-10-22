@@ -1,3 +1,5 @@
+#[cfg(not(target_os = "macos"))]
+use crate::i18n::text as tr;
 use crate::state::*;
 #[cfg(target_os = "macos")]
 use std::{
@@ -24,12 +26,34 @@ extern "C" {
         context: *mut c_void,
     );
     fn aropyt_window(window: *mut c_void, action: *const c_char, other: *mut c_void);
+    fn aropyt_menu_hints(template: *const c_char);
+    fn aropyt_menu_snapshot(
+        preview: bool,
+        callback: extern "C" fn(*mut c_void, *const u8, usize, *const c_char),
+        context: *mut c_void,
+    );
+}
+
+#[cfg(target_os = "macos")]
+pub fn menu_hints(template: &serde_json::Value) -> Result<()> {
+    let json = CString::new(template.to_string()).map_err(err)?;
+    unsafe { aropyt_menu_hints(json.as_ptr()) };
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn menu_snapshot(preview: bool) -> Result<serde_json::Value> {
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>>>();
+    let context = Box::into_raw(Box::new(tx)).cast();
+    unsafe { aropyt_menu_snapshot(preview, completed, context) };
+    let bytes = rx.recv_timeout(Duration::from_secs(10)).map_err(err)??;
+    serde_json::from_slice(&bytes).map_err(err)
 }
 #[cfg(target_os = "macos")]
 extern "C" fn completed(context: *mut c_void, data: *const u8, len: usize, error: *const c_char) {
     let tx: Box<mpsc::Sender<Result<Vec<u8>>>> = unsafe { Box::from_raw(context.cast()) };
     let value = if !error.is_null() {
-        Err(unsafe { CStr::from_ptr(error) }.to_string_lossy().into())
+        Err(crate::i18n::native_error(&unsafe { CStr::from_ptr(error) }.to_string_lossy()))
     } else if data.is_null() {
         Ok(vec![])
     } else {
@@ -77,7 +101,7 @@ pub fn render(
     #[cfg(not(target_os = "macos"))]
     {
         portable_export::render(
-            HOST.get().ok_or("原生导出未初始化")?,
+            HOST.get().ok_or(tr("原生导出未初始化", "Native export is not initialized"))?,
             html,
             mode,
             width,

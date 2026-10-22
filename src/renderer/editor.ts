@@ -1,3 +1,5 @@
+import { uiText } from '../shared/ui-language';
+import { selectedLines } from './selected-lines';
 import { displayFileUrl } from '../bridge/files';
 import {
   EditorSelection, EditorState, StateEffect, StateField,
@@ -6,18 +8,22 @@ import {
   Decoration, DecorationSet, EditorView, ViewUpdate, WidgetType, drawSelection,
   keymap, rectangularSelection, showTooltip,
 } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab, indentLess } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentWithTab, indentLess, isolateHistory } from '@codemirror/commands';
 import hljs from 'highlight.js';
-import { renderDocument, BlockRange, Heading, dialect, escapeHtml, standaloneImage } from './md';
+import { renderDocument, BlockRange, Heading, dialect, escapeHtml, standaloneImage, StandaloneImage, documentReferences } from './md';
 import { codeFence, CodeFence } from './code-fences';
 import { attachLanguagePicker } from './code-language';
 import { plainText, reindentCode } from './editing-commands';
-import { parseTable, serializeTable, tableFromHeader, TableWidget, tableAction } from './table-editor';
+import { parseTable, serializeTable, tableFromHeader, TableWidget, tableAction, refreshTableMedia, refreshTableLanguage, focusTableRange, tableImageAt } from './table-editor';
 import { inlineSpans, inlineMathSpans, nativeParagraph } from './inline-markdown';
+import { inlineImages, inlineFootnotes } from './inline-media';
 import { cachedDiagram } from './diagram-preview';
 import { structureRows } from './native-structure';
+import { backspaceListItem, indentListItem } from './list-editing';
 import { highlightedCode } from './code-highlighting';
-import { applyImageDimensions, transformImage } from './image-actions';
+import { applyImageDimensions, transformImage, ImageSourceRange } from './image-actions';
+import { SearchHit, searchHighlightField, searchHighlights, searchIntersects, searchClass, setSearchHighlights } from './search-highlights';
+import { footnotePreview } from './footnote-preview';
 
 /* --------------------------------------------------------------- effects */
 
@@ -129,7 +135,7 @@ function languageControl(view: EditorView, fence: CodeFence): HTMLElement {
   const input = document.createElement('input');
   input.className = 'cm-code-language'; input.contentEditable = 'false'; input.autocapitalize = 'off';
   input.setAttribute('autocorrect', 'off'); input.setAttribute('spellcheck', 'false');
-  input.value = fence.lang; input.placeholder = '代码语言'; input.setAttribute('aria-label', '代码块语言 / Code language');
+  input.value = fence.lang; input.placeholder = uiText('代码语言', 'Code language'); input.setAttribute('aria-label', uiText('代码块语言', 'Code language'));
   const commit = () => {
     const fence = languageFences.get(shell);
     if (!fence || fence.from > view.state.doc.length) return;
@@ -193,7 +199,7 @@ class ListMarkerWidget extends WidgetType {
       span.setAttribute('aria-hidden', 'true');
     }
     else {
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = this.task; checkbox.setAttribute('aria-label', '任务状态');
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = this.task; checkbox.setAttribute('aria-label', uiText('任务状态', 'Task status'));
       checkbox.addEventListener('mousedown', (event) => event.preventDefault());
       checkbox.addEventListener('click', (event) => {
         event.stopPropagation(); view.dispatch({ changes: { from: this.position, to: this.position + 1, insert: this.task ? ' ' : 'x' }, userEvent: 'input' });
@@ -217,10 +223,12 @@ class InlineMathWidget extends WidgetType {
 }
 
 class ImagePreviewWidget extends WidgetType {
-  constructor(readonly source: string, readonly from: number, readonly active: boolean) { super(); }
-  override eq(other: ImagePreviewWidget): boolean { return this.source === other.source && this.from === other.from && this.active === other.active; }
+  constructor(readonly source: string, readonly from: number, readonly active: boolean,
+    readonly data: StandaloneImage = standaloneImage(source)!, readonly inline = false) { super(); }
+  override eq(other: ImagePreviewWidget): boolean { return this.source === other.source && this.from === other.from && this.active === other.active &&
+    this.inline === other.inline && JSON.stringify(this.data) === JSON.stringify(other.data); }
   toDOM(view: EditorView): HTMLElement {
-    const root = document.createElement('div'); root.className = 'md-block-widget cm-image-preview' + (this.active ? ' is-active' : ''); root.contentEditable = 'false';
+    const root = document.createElement(this.inline ? 'span' : 'div'); root.className = (this.inline ? 'cm-inline-image ' : 'md-block-widget ') + 'cm-image-preview' + (this.active ? ' is-active' : ''); root.contentEditable = 'false';
     const img = document.createElement('img'); img.className = 'md-image';
     const fallback = document.createElement('span'); fallback.className = 'cm-image-fallback'; fallback.hidden = true;
     const failed = (value: boolean) => {
@@ -231,15 +239,42 @@ class ImagePreviewWidget extends WidgetType {
     root.append(img, fallback); this.updateDOM(root, view); return root;
   }
   override updateDOM(root: HTMLElement, view: EditorView): boolean {
-    const data = standaloneImage(this.source); if (!data) return false;
+    const data = this.data; if (!data) return false;
     root.dataset.from = String(this.from); root.dataset.to = String(this.from + this.source.length);
     root.dataset.selectionFrom = String(data.selectionFrom); root.dataset.selectionTo = String(data.selectionTo); root.classList.toggle('is-active', this.active);
     root.querySelector('.cm-image-fallback')!.textContent = this.source;
     root.hidden = this.active && root.classList.contains('is-failed');
     const img = root.querySelector('img')!; img.alt = data.alt; img.title = data.title; applyImageDimensions(img, data);
-    const src = (view as any).__host?.resolveSrc(data.src) ?? data.src;
-    if (img.getAttribute('src') !== src) { root.classList.remove('is-failed'); root.hidden = false; img.hidden = false; root.querySelector<HTMLElement>('.cm-image-fallback')!.hidden = true; img.setAttribute('src', displayFileUrl(src)); }
+    const src = displayFileUrl((view as any).__host?.resolveSrc(data.src) ?? data.src);
+    if (img.getAttribute('src') !== src) { root.classList.remove('is-failed'); root.hidden = false; img.hidden = false; root.querySelector<HTMLElement>('.cm-image-fallback')!.hidden = true; img.setAttribute('src', src); }
     return true;
+  }
+  override ignoreEvent(): boolean { return false; }
+}
+
+class FootnoteReferenceWidget extends WidgetType {
+  constructor(readonly label: string, readonly from: number, readonly to: number) { super(); }
+  override eq(other: FootnoteReferenceWidget): boolean { return this.label === other.label && this.from === other.from && this.to === other.to; }
+  toDOM(): HTMLElement {
+    const root = document.createElement('sup'); root.className = 'cm-inline-footnote'; root.contentEditable = 'false';
+    root.textContent = this.label; root.dataset.from = String(this.from); root.dataset.to = String(this.to);
+    root.dataset.footnoteLabel = this.label; return root;
+  }
+  override ignoreEvent(): boolean { return false; }
+}
+
+class FootnoteBackrefWidget extends WidgetType {
+  constructor(readonly label: string, readonly from: number) { super(); }
+  override eq(other: FootnoteBackrefWidget): boolean { return this.label === other.label && this.from === other.from; }
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement('a'); root.className = 'cm-footnote-backref'; root.contentEditable = 'false';
+    root.textContent = '↩'; root.href = '#'; root.dataset.from = String(this.from); root.title = `[^${this.label}]`;
+    root.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation();
+      view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true });
+      if (!focusTableRange(view, this.from + 2, this.from + 2)) view.focus();
+    });
+    return root;
   }
   override ignoreEvent(): boolean { return false; }
 }
@@ -337,22 +372,49 @@ export function getDocSnapshot(): string {
 function buildDecorations(state: EditorState, host: EditorHost | null): DecorationSet {
   docSnapshot = state.doc.toString();
   const mode = state.field(modeField);
-  if (mode.source) return Decoration.none;
+  const search = searchHighlights(state), searching = !!state.field(searchHighlightField, false)?.selecting;
+  if (mode.source) return Decoration.set(search.map(hit => Decoration.mark({ class: searchClass(hit.current) }).range(hit.from, hit.to)), true);
 
   const items: { from: number; to: number; deco: Decoration }[] = [];
   const text = state.doc.toString();
   const offsets = lineStartOffsets(state);
   const [firstActive, lastActive] = activeLineRange(state);
   const blocks: BlockRange[] = renderDocumentBlocks(text);
+  const references = documentReferences(text);
   const codeLines = new Set<number>();
   const headingLines = new Set<number>();
   const structureLines = new Set<number>();
-  const inline = (from: number, source: string) => {
+  const selectionActive = (from: number, to: number, bodyFrom = from, bodyTo = from) => {
     const selection = state.selection.main;
-    const mathSpans = inlineMathSpans(source);
+    return (!searching && (selection.empty ? selection.head > from && selection.head < to : selection.from < to && selection.to > from)) ||
+      searchIntersects(search, from, bodyFrom) || searchIntersects(search, bodyTo, to);
+  };
+  const inline = (from: number, source: string) => {
+    const candidates = inlineImages(source, references);
+    const formulas = inlineMathSpans(source).filter(formula => !candidates.some(image => formula.from >= image.from && formula.to <= image.to));
+    const images = candidates.filter(image => !formulas.some(formula => image.from >= formula.from && image.to <= formula.to));
+    const footnotes = inlineFootnotes(source).filter(note => ![...images, ...formulas].some(range => note.from >= range.from && note.to <= range.to));
+    const richRanges = [...images, ...footnotes];
+    for (const image of images) {
+      const a = from + image.from, b = from + image.to;
+      const active = selectionActive(a, b);
+      const widget = new ImagePreviewWidget(image.source, a, active, image.image, true);
+      if (active) {
+        items.push({ from: a, to: b, deco: Decoration.mark({ class: 'cm-inline-image-source' }) });
+        items.push({ from: b, to: b, deco: Decoration.widget({ widget, side: 1 }) });
+      } else items.push({ from: a, to: b, deco: Decoration.replace({ widget, inclusive: false }) });
+    }
+    for (const note of footnotes) {
+      const a = from + note.from, b = from + note.to;
+      const active = selectionActive(a, b);
+      if (active) items.push({ from: a, to: b, deco: Decoration.mark({ class: 'cm-md-marker' }) });
+      else items.push({ from: a, to: b, deco: Decoration.replace({ widget: new FootnoteReferenceWidget(note.label, a, b), inclusive: false }) });
+    }
+    const mathSpans = formulas;
     for (const math of mathSpans) {
+      if (richRanges.some(range => math.from >= range.from && math.to <= range.to)) continue;
       const a = from + math.from, b = from + math.to;
-      const active = selection.empty ? selection.head > a && selection.head < b : selection.from < b && selection.to > a;
+      const active = selectionActive(a, b);
       if (!active) items.push({ from: a, to: b, deco: Decoration.replace({ widget: new InlineMathWidget(math.tex, a, b), inclusive: false }) });
       else {
         items.push({ from: a, to: a + 1, deco: Decoration.mark({ class: 'cm-md-marker' }) });
@@ -361,8 +423,9 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
       }
     }
     for (const span of inlineSpans(source)) {
+      if (richRanges.some(range => span.from >= range.from && span.to <= range.to)) continue;
       if (mathSpans.some((math) => span.from >= math.from && span.to <= math.to)) continue;
-      const active = selection.empty ? selection.head > from + span.from && selection.head < from + span.to : selection.from < from + span.to && selection.to > from + span.from;
+      const active = selectionActive(from + span.from, from + span.to, from + span.bodyFrom, from + span.bodyTo);
       if (span.bodyTo > span.bodyFrom && span.className) items.push({ from: from + span.bodyFrom, to: from + span.bodyTo,
         deco: Decoration.mark({ class: span.className, attributes: {
           ...(span.href ? { 'data-href': span.href, title: span.href } : {}),
@@ -380,7 +443,7 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
     const endLine = b.endLine; // exclusive, 1-based
     if (endLine < startLine) continue;
 
-    const active = !(endLine < firstActive || startLine > lastActive);
+    const active = !(endLine < firstActive || startLine > lastActive) || searchIntersects(search, offsets[startLine], state.doc.line(endLine).to);
     const previous = blocks[blocks.indexOf(b) - 1];
     const previousHeading = previous?.kind === 'heading_open' && headingAt(state, previous.startLine + 1);
     const previousFence = previous && codeFence(state, previous);
@@ -392,7 +455,7 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
       const from = offsets[startLine], to = endLine + 1 < offsets.length ? offsets[endLine + 1] : state.doc.length;
       const source = text.slice(from, to);
       if (parseTable(source)) {
-        items.push({ from, to, deco: Decoration.replace({ widget: new TableWidget(source, from, to), block: true }) });
+        items.push({ from, to, deco: Decoration.replace({ widget: new TableWidget(source, from, to, references, searchHighlights(state, from, to)), block: true }) });
         continue;
       }
     }
@@ -403,11 +466,11 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
       items.push({ from: heading.line.from, to: heading.line.from, deco: Decoration.line({
         class: `cm-heading cm-header-${heading.level}` + afterClass,
       }) });
-      if (heading.bodyFrom > heading.line.from) items.push({ from: heading.line.from, to: heading.bodyFrom,
+      if (heading.bodyFrom > heading.line.from && !searchIntersects(search, heading.line.from, heading.bodyFrom)) items.push({ from: heading.line.from, to: heading.bodyFrom,
         deco: Decoration.replace({ inclusive: false }) });
       if (heading.underline) {
         headingLines.add(heading.underline.number);
-        items.push({ from: heading.line.to, to: heading.underline.to,
+        if (!searchIntersects(search, heading.line.to, heading.underline.to)) items.push({ from: heading.line.to, to: heading.underline.to,
           deco: Decoration.replace({ block: true, inclusiveStart: false, inclusiveEnd: true }) });
       }
       inline(heading.bodyFrom, heading.line.text.slice(heading.bodyFrom - heading.line.from));
@@ -416,24 +479,51 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
 
     if (b.kind === 'paragraph_open' || b.kind === 'html_block') {
       const from = offsets[startLine], last = state.doc.line(endLine), source = text.slice(from, last.to);
-      if (standaloneImage(source) && !state.field(preferenceField).liveRenderSource) {
+      const image = standaloneImage(source, references);
+      if (image && !state.field(preferenceField).liveRenderSource) {
         if (active) {
           structureLines.add(startLine);
           items.push({ from, to: from, deco: Decoration.line({ class: 'cm-native-image-source cm-paragraph-first' + afterClass }) });
-          items.push({ from: last.to, to: last.to, deco: Decoration.widget({ widget: new ImagePreviewWidget(source, from, true), block: true, side: 1 }) });
+          items.push({ from: last.to, to: last.to, deco: Decoration.widget({ widget: new ImagePreviewWidget(source, from, true, image), block: true, side: 1 }) });
         } else {
-          items.push({ from, to: Math.min(last.to + 1, state.doc.length), deco: Decoration.replace({ widget: new ImagePreviewWidget(source, from, false), block: true }) });
+          items.push({ from, to: Math.min(last.to + 1, state.doc.length), deco: Decoration.replace({ widget: new ImagePreviewWidget(source, from, false, image), block: true }) });
         }
         continue;
       }
     }
 
-    if (b.kind === 'paragraph_open' && !(active && state.field(preferenceField).liveRenderSource)) {
+    if (['paragraph_open', 'html_block'].includes(b.kind) && !(active && state.field(preferenceField).liveRenderSource)) {
       const from = offsets[startLine], last = state.doc.line(endLine), source = text.slice(from, last.to);
-      if (nativeParagraph(source)) {
+      if (nativeParagraph(source, true)) {
         items.push({ from, to: from, deco: Decoration.line({ class: 'cm-paragraph-first' + afterClass }) });
         items.push({ from: last.from, to: last.from, deco: Decoration.line({ class: 'cm-paragraph-last' }) });
         inline(from, source); continue;
+      }
+    }
+
+    if (b.kind === 'footnote_def' || b.kind === 'reference_def') {
+      const first = state.doc.line(startLine), match = /^( {0,3}\[\^?)([^\]]+)(\]:[ \t]*)/.exec(first.text);
+      if (match && !state.field(preferenceField).liveRenderSource) {
+        for (let n = startLine; n <= endLine; n++) {
+          const row = state.doc.line(n), prefix = n === startLine ? match[0].length : /^[ \t]*/.exec(row.text)![0].length;
+          items.push({ from: row.from, to: row.from, deco: Decoration.line({ class: 'cm-reference-definition' + (n === startLine ? ' cm-paragraph-first' + afterClass : '') }) });
+          structureLines.add(n); inline(row.from + prefix, row.text.slice(prefix));
+        }
+        items.push({ from: first.from, to: first.from + match[1].length, deco: Decoration.mark({ class: 'cm-md-marker' }) });
+        items.push({ from: first.from + match[1].length, to: first.from + match[1].length + match[2].length, deco: Decoration.mark({ class: 'cm-reference-label' }) });
+        items.push({ from: first.from + match[1].length + match[2].length, to: first.from + match[0].length, deco: Decoration.mark({ class: 'cm-md-marker' }) });
+        if (b.kind === 'footnote_def') {
+          const reference = inlineFootnotes(text).find(note => note.label === match[2] && !blocks.some(block =>
+            ['footnote_def', 'fence', 'code_block'].includes(block.kind) && note.from >= offsets[block.startLine + 1] && note.from < offsets[block.endLine + 1]));
+          if (reference) {
+            const end = state.doc.line(endLine).to;
+            items.push({ from: end, to: end, deco: Decoration.widget({ widget: new FootnoteBackrefWidget(match[2], reference.from), side: 1 }) });
+          }
+        } else {
+          const start = first.from + match[0].length, url = /^(?:<[^>]+>|\S+)/.exec(first.text.slice(match[0].length));
+          if (url) items.push({ from: start, to: start + url[0].length, deco: Decoration.mark({ class: 'cm-reference-url' }) });
+        }
+        continue;
       }
     }
 
@@ -447,7 +537,7 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
           (index === 0 ? (quote ? ' cm-native-quote-first' : ' cm-native-list-first') + afterClass : '') +
           (!quote && rows[index + 1]?.marker === '' ? ' cm-native-list-soft' : '') +
           (index === rows.length - 1 ? (quote ? ' cm-native-quote-last' : ' cm-native-list-last') : ''), attributes: { style: `--cm-structure-depth:${row.depth}` } }) });
-        items.push({ from, to: from + row.prefix, deco: Decoration.replace({ inclusive: false,
+        if (row.prefix > 0 && !searchIntersects(search, from, from + row.prefix)) items.push({ from, to: from + row.prefix, deco: Decoration.replace({ inclusive: false,
           ...(quote ? {} : { widget: new ListMarkerWidget(row.marker, row.task, from + text.slice(from, from + row.prefix).lastIndexOf('[') + 1) }) }) });
         inline(from + row.prefix, row.body);
       });
@@ -460,10 +550,10 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
     const fence = codeFence(state, b);
     const preview = fence && (fence.diagram && dialect().diagrams || fence.math && dialect().codeBlockMath);
     if (fence && (!preview || active) && !fence.empty) {
-      items.push({ from: fence.from, to: fence.bodyFrom, deco: Decoration.replace({
+      if (!searchIntersects(search, fence.from, fence.bodyFrom)) items.push({ from: fence.from, to: fence.bodyFrom, deco: Decoration.replace({
         widget: new FenceEdgeWidget(fence, false, false, afterClass), block: true, inclusiveStart: true, inclusiveEnd: false,
       }) });
-      if (fence.closed) items.push({ from: fence.bodyTo, to: fence.to, deco: Decoration.replace({
+      if (fence.closed && !searchIntersects(search, fence.bodyTo, fence.to)) items.push({ from: fence.bodyTo, to: fence.to, deco: Decoration.replace({
         widget: new FenceEdgeWidget(fence, true, active), block: true, inclusiveStart: false, inclusiveEnd: true,
       }) });
       const numbered = dialect().fenceLineNumbers || /\b(line[-_]?numbers?|lineno)\b/i.test(fence.info);
@@ -538,6 +628,13 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
     }) });
   }
 
+  const tables = blocks.filter(block => block.kind === 'table_open').map(block => ({ from: offsets[block.startLine + 1], to: offsets[block.endLine + 1] ?? state.doc.length }));
+  for (const hit of search) {
+    let ranges = [{ from: hit.from, to: hit.to }];
+    for (const table of tables) ranges = ranges.flatMap(range => range.from >= table.to || range.to <= table.from ? [range] :
+      [{ from: range.from, to: Math.min(range.to, table.from) }, { from: Math.max(range.from, table.to), to: range.to }].filter(part => part.from < part.to));
+    for (const range of ranges) items.push({ ...range, deco: Decoration.mark({ class: searchClass(hit.current) }) });
+  }
   items.sort((a, b) => (a.from - b.from) || (a.to - b.to));
   return Decoration.set(items.map((i) => i.deco.range(i.from, i.to)), true);
 }
@@ -767,14 +864,14 @@ const fenceKeymap = keymap.of([
           }); return true;
         }
       }
-      const prefix = /^(\s*)(?:(\d+)([.)]) |([-*+]) (?:\[[ xX]\] )?|(> ?)+)/.exec(line.text);
-      if (!prefix || !sel.empty || sel.head < line.from + prefix[0].length) {
+      const prefix = /^([ \t]*)(?:(?:(\d+)([.)])|([-*+]))[ \t]+(?:\[[ xX]\][ \t]+)?|(?:>[ \t]?)+)/.exec(line.text);
+      if (!prefix || sel.to > line.to || sel.from < line.from + prefix[0].length) {
         if (sel.empty && /^(bullet|ordered)_list_open$/.test(block?.kind || '')) {
           for (let n = line.number - 1; n > block!.startLine; n--) {
             const earlier = view.state.doc.line(n), marker = /^([ \t]*)([-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/.exec(earlier.text);
             if (!marker) continue;
             let next = marker[0].replace(/\[[xX]\]/, '[ ]');
-            if (/^\d/.test(marker[2]) && view.state.field(preferenceField).orderedDelimiter !== 'repeat') next = marker[1] + (Number(marker[2].slice(0, -1)) + 1) + marker[2].slice(-1) + ' ';
+            if (/^\d/.test(marker[2]) && view.state.field(preferenceField).orderedDelimiter !== 'repeat') next = marker[1] + (Number(marker[2].slice(0, -1)) + 1) + marker[2].slice(-1) + next.slice(marker[1].length + marker[2].length);
             view.dispatch({ changes: { from: sel.from, insert: '\n' + next }, selection: { anchor: sel.from + 1 + next.length }, userEvent: 'input' }); return true;
           }
         }
@@ -783,12 +880,17 @@ const fenceKeymap = keymap.of([
         view.dispatch({ changes: { from, to: sel.empty ? from : sel.to, insert: '\n\n' },
           selection: { anchor: from + 2 }, userEvent: 'input' }); return true;
       }
-      if (!line.text.slice(prefix[0].length).trim()) {
-        view.dispatch({ changes: { from: line.from, to: line.to, insert: '' }, selection: { anchor: line.from }, userEvent: 'input' }); return true;
+      if (sel.empty && !line.text.slice(prefix[0].length).trim()) {
+        const quote = prefix[0].includes('>');
+        const outer = quote ? prefix[0].slice(0, prefix[0].lastIndexOf('>')) : prefix[1];
+        const insert = (quote ? outer.trimEnd() : outer) + '\n' + outer;
+        view.dispatch({ changes: { from: line.from, to: line.to, insert }, selection: { anchor: line.from + insert.length },
+          annotations: isolateHistory.of('full'), userEvent: 'input' }); return true;
       }
       let next = prefix[0].replace(/\[[xX]\]/, '[ ]');
-      if (prefix[2] && view.state.field(preferenceField).orderedDelimiter !== 'repeat') next = prefix[1] + (Number(prefix[2]) + 1) + prefix[3] + ' ';
-      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '\n' + next }, selection: { anchor: sel.from + 1 + next.length }, userEvent: 'input' }); return true;
+      if (prefix[2] && view.state.field(preferenceField).orderedDelimiter !== 'repeat') next = prefix[1] + (Number(prefix[2]) + 1) + prefix[3] + next.slice(prefix[1].length + prefix[2].length + 1);
+      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '\n' + next }, selection: { anchor: sel.from + 1 + next.length },
+        annotations: isolateHistory.of('full'), userEvent: 'input' }); return true;
     }
     const indent = /^\s*/.exec(line.text.slice(0, sel.from - line.from))![0];
     view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '\n' + indent },
@@ -823,15 +925,24 @@ const fenceKeymap = keymap.of([
   { key: 'Tab', run: (view) => changeIndent(view, false) },
   { key: 'Backspace', run(view) {
     const sel = view.state.selection.main; if (!sel.empty || view.state.field(modeField).source || currentFence(view)) return false;
-    const line = view.state.doc.lineAt(sel.head), prefix = /^(?:\s*(?:[-*+] |\d+[.)] )(?:\[[ xX]\] )?|\s*> ?)/.exec(line.text);
+    const line = view.state.doc.lineAt(sel.head), prefix = /^(?:[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)(?:\[[ xX]\][ \t]+)?| {0,3}(?:>[ \t]?)+)/.exec(line.text);
     if (!prefix || sel.head !== line.from + prefix[0].length) return false;
-    view.dispatch({ changes: { from: line.from, to: sel.head, insert: '' }, selection: { anchor: line.from }, userEvent: 'delete.backward' }); return true;
+    const block = renderDocumentBlocks(view.state.doc.toString()).find(block => /^(bullet|ordered)_list_open$/.test(block.kind) && block.startLine < line.number && block.endLine >= line.number);
+    if (block && backspaceListItem(view, block)) return true;
+    const insert = prefix[0].includes('>') ? prefix[0].slice(0, prefix[0].lastIndexOf('>')) : '';
+    view.dispatch({ changes: { from: line.from, to: sel.head, insert }, selection: { anchor: line.from + insert.length },
+      annotations: isolateHistory.of('full'), userEvent: 'delete.backward' }); return true;
   } },
 ]);
 
 function changeIndent(view: EditorView, reverse: boolean): boolean {
   const state = view.state, prefs = state.field(preferenceField), sel = state.selection.main;
   const fence = currentFence(view);
+  if (!fence && !state.field(modeField).source) {
+    const number = state.doc.lineAt(sel.from).number;
+    const block = renderDocumentBlocks(state.doc.toString()).find(block => /^(bullet|ordered)_list_open$/.test(block.kind) && block.startLine < number && block.endLine >= number);
+    if (block && indentListItem(view, block, reverse, prefs.indentSize === 'tab')) return true;
+  }
   if (reverse && fence && prefs.fenceShiftTabIndent) {
     view.dispatch({ changes: { from: fence.bodyFrom, to: fence.bodyTo,
       insert: reindentCode(state.sliceDoc(fence.bodyFrom, fence.bodyTo), fence.lang, Number(prefs.codeIndentSize || 4)) }, userEvent: 'input' }); return true;
@@ -842,7 +953,8 @@ function changeIndent(view: EditorView, reverse: boolean): boolean {
     view.dispatch({ changes: { from: sel.head, insert: unit }, selection: { anchor: sel.head + unit.length }, userEvent: 'input' }); return true;
   }
   const changes = [];
-  for (let number = state.doc.lineAt(sel.from).number; number <= state.doc.lineAt(sel.to).number; number++) {
+  const end = !sel.empty && sel.to === state.doc.lineAt(sel.to).from ? sel.to - 1 : sel.to;
+  for (let number = state.doc.lineAt(sel.from).number; number <= state.doc.lineAt(end).number; number++) {
     const line = state.doc.line(number), prefix = new RegExp('^(?:\\t| {1,' + width + '})').exec(line.text)?.[0];
     if (!reverse || prefix) changes.push({ from: line.from, to: line.from + (reverse ? prefix!.length : 0), insert: reverse ? '' : unit });
   }
@@ -914,8 +1026,9 @@ export class DocEditor {
   readonly view: EditorView;
   private host: EditorHost;
   private source = false;
-  private imageContext: { from: number; to: number; source: string } | null = null;
+  private imageContext: ImageSourceRange | null = null;
   private headingStyle = document.createElement('style');
+  private disposeWindowFocus = () => {};
 
   constructor(opts: EditorOptions) {
     this.host = opts.host;
@@ -937,8 +1050,10 @@ export class DocEditor {
         preferenceField.init(() => ({ ...opts.preferences })),
         modeField,
         fenceSelection,
+        searchHighlightField,
         decorationField,
         inlineMathTooltip,
+        footnotePreview,
         EditorView.updateListener.of((u: ViewUpdate) => {
           if (u.docChanged) opts.onChange();
           if (u.selectionSet || u.docChanged) this.emitCursor();
@@ -970,6 +1085,32 @@ export class DocEditor {
     (this.view as unknown as { __host: EditorHost }).__host = opts.host;
     this.updateModeClass();
     this.focusLoop();
+    this.preserveWindowFocus();
+  }
+
+  private preserveWindowFocus(): void {
+    if (!/Linux/i.test(navigator.platform)) return;
+    const doc = this.view.dom.ownerDocument, win = doc.defaultView!;
+    let restore = false;
+    const blur = () => {
+      if (doc.hasFocus() || doc.activeElement !== this.view.contentDOM) return;
+      // CodeMirror also synchronizes the DOM selection in inactive windows.
+      // On GTK/X11 that claims PRIMARY and collapses the foreground input's
+      // selection. Keep the model range and restore native focus on activation.
+      restore = true;
+      this.view.contentDOM.blur();
+    };
+    const focus = () => {
+      const shouldRestore = restore && doc.activeElement === doc.body;
+      restore = false;
+      if (shouldRestore) this.view.focus();
+    };
+    win.addEventListener('blur', blur);
+    win.addEventListener('focus', focus);
+    this.disposeWindowFocus = () => {
+      win.removeEventListener('blur', blur);
+      win.removeEventListener('focus', focus);
+    };
   }
 
   private focusLoop(): void {
@@ -982,29 +1123,56 @@ export class DocEditor {
     });
   }
 
-  imageAt(target: HTMLElement): { from: number; to: number; source: string } | null {
+  imageAt(target: HTMLElement): ImageSourceRange | null {
+    if (target.closest('.md-table-widget')) {
+      const range = tableImageAt(this.view, target);
+      return this.imageContext = range && standaloneImage(range.source, documentReferences(this.value)) ? range : null;
+    }
     const view = this.view, root = target.closest<HTMLElement>('.cm-image-preview');
-    const line = target?.closest<HTMLElement>('.cm-native-image-source');
+    const line = target?.closest<HTMLElement>('.cm-native-image-source,.cm-inline-image-source');
     if (!root && !line) return null;
     const row = !root && line ? view.state.doc.lineAt(view.posAtDOM(line)) : null;
-    const from = root ? Number(root.dataset.from) : row!.from, to = root ? Number(root.dataset.to) : row!.to;
+    const range = row && line?.classList.contains('cm-inline-image-source') ? inlineImages(row.text, documentReferences(this.value)).find(image =>
+      row.from + image.from === view.posAtDOM(line)) : null;
+    const from = root ? Number(root.dataset.from) : row!.from + (range?.from || 0), to = root ? Number(root.dataset.to) : range ? row!.from + range.to : row!.to;
     const source = view.state.sliceDoc(from, to);
-    if (!standaloneImage(source)) return null;
+    if (!standaloneImage(source, documentReferences(this.value))) return null;
     return this.imageContext = { from, to, source };
   }
 
   handleImageAction(action: string): boolean {
     if (!action.startsWith('image:')) return false;
-    const context = this.imageContext; if (!context || this.view.state.sliceDoc(context.from, Math.min(context.to, this.value.length)) !== context.source) return true;
-    const source = transformImage(context.source, action); if (source === null) return true;
-    if (source !== context.source) this.view.dispatch({ changes: { from: context.from, to: context.to, insert: source },
-      selection: { anchor: context.from, head: context.from + source.length }, userEvent: 'input' });
-    this.imageContext = { from: context.from, to: context.from + source.length, source }; this.view.focus(); return true;
+    const context = this.imageContext; if (!context) return true;
+    const source = transformImage(context.source, action, documentReferences(this.value)); if (source === null) return true;
+    this.replaceImage(context, source, true); return true;
+  }
+
+  replaceImage(context: ImageSourceRange, source: string, focus = false): boolean {
+    if (context.from < 0 || context.to > this.value.length || context.to < context.from ||
+        this.view.state.sliceDoc(context.from, context.to) !== (context.rawSource ?? context.source)) return false;
+    // Table delimiters must remain syntax-safe, including pipes inside HTML
+    // attributes. Entities preserve their value without changing nearby cells.
+    const insert = source === context.source ? context.rawSource ?? source : context.table ? source.replace(/\|/g, '&#124;') : source;
+    if (insert !== (context.rawSource ?? context.source)) this.view.dispatch({ changes: { from: context.from, to: context.to, insert },
+      ...(focus ? { selection: { anchor: context.from, head: context.from + insert.length } } : {}), userEvent: 'input' });
+    this.imageContext = { ...context, to: context.from + insert.length, source, rawSource: context.table ? insert : undefined };
+    if (focus && (!context.table || !focusTableRange(this.view, context.from, context.from + insert.length, context.cell))) this.view.focus();
+    return true;
   }
 
   private handleWidgetClick(event: MouseEvent, view: EditorView): boolean {
     const target = event.target as HTMLElement | null;
     if (target?.closest('.md-table-widget, .cm-code-language-shell')) return false;
+    const backref = target?.closest<HTMLElement>('.cm-footnote-backref');
+    if (backref) {
+      if (event.button !== 0) return false;
+      event.preventDefault(); view.dispatch({ selection: { anchor: Number(backref.dataset.from) }, scrollIntoView: true }); view.focus(); return true;
+    }
+    const note = target?.closest<HTMLElement>('.cm-inline-footnote');
+    if (note) {
+      if (event.button !== 0) return false;
+      event.preventDefault(); view.dispatch({ selection: { anchor: Number(note.dataset.from) + 2, head: Number(note.dataset.to) - 1 } }); view.focus(); return true;
+    }
     const math = target?.closest<HTMLElement>('.cm-inline-math-widget');
     if (math) {
       event.preventDefault(); view.dispatch({ selection: { anchor: Number(math.dataset.from) + 1, head: Number(math.dataset.to) - 1 } }); view.focus(); return true;
@@ -1167,14 +1335,38 @@ export class DocEditor {
   refreshDecorations(): void {
     this.syncHeadingStyles();
     this.view.dispatch({ effects: rebuild.of() });
+    refreshTableMedia(this.view);
     for (const formula of this.view.dom.querySelectorAll<HTMLElement>('.cm-inline-math-widget, .md-table-math-preview, .md-table-math-tooltip')) {
       formula.innerHTML = this.host.math(formula.dataset.tex ?? '', false);
     }
     for (const image of this.view.dom.querySelectorAll<HTMLImageElement>('.cm-image-preview img')) {
-      const source = this.view.state.doc.lineAt(Number(image.parentElement!.dataset.from)).text;
-      const info = standaloneImage(source); if (info) image.src = displayFileUrl(this.host.resolveSrc(info.src));
+      const root = image.parentElement!, source = this.view.state.sliceDoc(Number(root.dataset.from), Number(root.dataset.to));
+      const info = standaloneImage(source, documentReferences(this.value)); if (info) image.src = displayFileUrl(this.host.resolveSrc(info.src));
     }
     this.view.requestMeasure();
+  }
+
+  refreshUiLanguage(): void {
+    this.refreshDecorations();
+    for (const input of this.view.dom.querySelectorAll<HTMLInputElement>('.cm-code-language')) {
+      input.placeholder = uiText('代码语言', 'Code language');
+      input.setAttribute('aria-label', uiText('代码块语言', 'Code language'));
+    }
+    for (const checkbox of this.view.dom.querySelectorAll<HTMLInputElement>('.cm-task-checkbox input, .cm-list-marker input[type=checkbox]'))
+      checkbox.setAttribute('aria-label', uiText('任务状态', 'Task status'));
+    refreshTableLanguage(this.view);
+  }
+
+  setSearchHighlights(hits: SearchHit[], current: number, selectCurrent = false): void {
+    const hit = hits[current];
+    this.view.dispatch({ effects: setSearchHighlights.of({ hits, current, selecting: !!hits.length && (selectCurrent || this.view.state.field(searchHighlightField).selecting) }),
+      ...(selectCurrent && hit ? { selection: { anchor: hit.from, head: hit.to }, scrollIntoView: true } : {}) });
+    if (selectCurrent && hit) this.view.dom.querySelector<HTMLElement>('.md-table-widget .cm-search-hit.is-current')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  focusSearchHit(): void {
+    const selection = this.view.state.selection.main;
+    if (!focusTableRange(this.view, selection.from, selection.to)) this.focus();
   }
 
   configure(preferences: Record<string, any>): void {
@@ -1222,6 +1414,7 @@ export class DocEditor {
   }
 
   destroy(): void {
+    this.disposeWindowFocus();
     this.headingStyle.remove();
     this.view.destroy();
   }
@@ -1238,7 +1431,7 @@ export function replaceSelection(editor: DocEditor, text: string): void {
   });
 }
 
-export function wrapSelection(editor: DocEditor, before: string, after = before, placeholder = 'text'): void {
+export function wrapSelection(editor: DocEditor, before: string, after = before, placeholder = uiText('文本', 'text')): void {
   const view = editor.view;
   const sel = view.state.selection.main;
   const doc = view.state.doc;
@@ -1260,8 +1453,7 @@ export function lineTransform(
 ): void {
   const view = editor.view;
   const sel = view.state.selection.main;
-  const first = view.state.doc.lineAt(sel.from).number;
-  const last = view.state.doc.lineAt(sel.to).number;
+  const { first, last } = selectedLines(view.state);
   const changes: { from: number; to: number; insert: string }[] = [];
   for (let n = first; n <= last; n++) {
     const line = view.state.doc.line(n);

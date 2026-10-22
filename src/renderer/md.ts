@@ -1,3 +1,4 @@
+import { uiText } from '../shared/ui-language';
 import { displayFileUrl } from '../bridge/files';
 import MarkdownIt from 'markdown-it';
 import footnote from 'markdown-it-footnote';
@@ -84,6 +85,26 @@ const MD = new MarkdownIt({
 MD.use(footnote).use(taskLists, { enabled: true });
 MD.use(subPlugin).use(supPlugin).use(markPlugin);
 
+// The native reference editor applies a Setext underline to the immediately
+// preceding line. Split earlier paragraph lines without changing source maps.
+MD.core.ruler.after('block', 'single_line_setext', (state) => {
+  for (let i = 0; i < state.tokens.length; i++) {
+    const open = state.tokens[i], body = state.tokens[i + 1];
+    if (open.type !== 'heading_open' || !['=', '-'].includes(open.markup) || !open.map ||
+        open.map[1] - open.map[0] <= 2 || body?.type !== 'inline') continue;
+    const split = body.content.lastIndexOf('\n');
+    if (split < 0) continue;
+    const start = open.map[0], heading = open.map[1] - 2;
+    const paragraph = new state.Token('paragraph_open', 'p', 1);
+    paragraph.level = open.level; paragraph.map = [start, heading];
+    const text = new state.Token('inline', '', 0);
+    text.level = body.level; text.map = [start, heading]; text.content = body.content.slice(0, split); text.children = [];
+    const close = new state.Token('paragraph_close', 'p', -1); close.level = open.level;
+    open.map = [heading, open.map[1]]; body.map = [heading, heading + 1]; body.content = body.content.slice(split + 1);
+    state.tokens.splice(i, 0, paragraph, text, close); i += 3;
+  }
+});
+
 MD.renderer.rules.softbreak = (_tokens, _index, options, env) => {
   const breaks = env.preserveLineBreaks ?? options.breaks;
   return breaks ? (D.visibleBr ? '<span class="md-br-marker" aria-hidden="true">↵</span>' : '') + '<br>\n' : '\n';
@@ -130,7 +151,18 @@ export interface StandaloneImage {
   kind: 'markdown' | 'html'; src: string; alt: string; title: string; altLength: number;
   selectionFrom: number; selectionTo: number; attributes: Record<string, string>;
 }
-export function standaloneImage(source: string): StandaloneImage | null {
+export type MarkdownReferences = Record<string, { href: string; title: string }>;
+const referenceCache = new Map<string, MarkdownReferences>();
+export function documentReferences(source: string): MarkdownReferences {
+  const cached = referenceCache.get(source); if (cached) return cached;
+  const env: { references?: MarkdownReferences } = {};
+  MD.parse(prepareMarkdown(source), env);
+  const references = env.references || {};
+  if (referenceCache.size > 16) referenceCache.clear();
+  referenceCache.set(source, references); return references;
+}
+
+export function standaloneImage(source: string, references?: MarkdownReferences): StandaloneImage | null {
   if (source.includes('\n')) return null;
   if (/^ {0,3}<img\b.*>\s*$/i.test(source)) {
     const template = document.createElement('template'); template.innerHTML = source.trim();
@@ -141,7 +173,7 @@ export function standaloneImage(source: string): StandaloneImage | null {
       selectionFrom: 0, selectionTo: source.length, attributes };
   }
   if (!source.startsWith('![')) return null;
-  const children = MD.parseInline(source, {})[0]?.children ?? [];
+  const children = MD.parseInline(source, { references })[0]?.children ?? [];
   if (children.length !== 1 || children[0].type !== 'image') return null;
   const token = children[0], alt = /^!\[((?:\\.|[^\]\\])*)\]/.exec(source);
   const src = token.attrGet('src') ?? '', title = token.attrGet('title') ?? '', altLength = alt?.[1].length ?? 0;
@@ -405,7 +437,7 @@ export function setDialect(next: Partial<Dialect>): boolean {
     quotes: [double[0] || '“', double[1] || '”', single[0] || '‘', single[1] || '’'] });
   if (D.smartQuotes) MD.core.ruler.enable('smartquotes'); else MD.core.ruler.disable('smartquotes');
   if (D.smartDash) MD.core.ruler.enable('replacements'); else MD.core.ruler.disable('replacements');
-  blockCache.clear();
+  blockCache.clear(); referenceCache.clear();
   return true;
 }
 
@@ -479,7 +511,10 @@ export function blockRanges(src: string): BlockRange[] {
 
   let tokens: ReturnType<MarkdownIt['parse']>;
   try {
-    tokens = MD.parse(prepareMarkdown(body), {});
+    const env: { references?: MarkdownReferences } = {};
+    tokens = MD.parse(prepareMarkdown(body), env);
+    if (referenceCache.size > 16) referenceCache.clear();
+    referenceCache.set(src, env.references || {});
   } catch {
     return out;
   }
@@ -502,6 +537,11 @@ export function blockRanges(src: string): BlockRange[] {
     let end = ln + 1;
     while (end < lines.length && /^[ \t]{2,}\S/.test(lines[end])) end++;
     out.push({ startLine: ln, endLine: end, kind: 'footnote_def' });
+  }
+  for (let ln = 0; ln < lines.length; ln++) {
+    if (/^ {0,3}\[(?!\^)[^\]]+\]:[ \t]*\S/.test(lines[ln]) && !out.some((b) => ln >= b.startLine && ln < b.endLine)) {
+      out.push({ startLine: ln, endLine: ln + 1, kind: 'reference_def' });
+    }
   }
   out.sort((a, b) => a.startLine - b.startLine);
 
@@ -551,7 +591,7 @@ export interface RenderResult {
   blocks: BlockRange[];
 }
 
-export function renderDocument(src: string, opts: RenderOptions = {}): RenderResult {
+function renderMarkdown(src: string, opts: RenderOptions, footnoteLabel?: string): RenderResult {
   imageResolver = opts.resolveSrc ?? null;
   usedSlugs.clear();
 
@@ -577,23 +617,30 @@ export function renderDocument(src: string, opts: RenderOptions = {}): RenderRes
 
   let html = '';
   try {
-    html = MD.render(prepareMarkdown(body), { preserveLineBreaks: opts.preserveLineBreaks });
+    const env = { preserveLineBreaks: opts.preserveLineBreaks };
+    if (footnoteLabel === undefined) html = MD.render(prepareMarkdown(body), env);
+    else {
+      const tokens = MD.parse(prepareMarkdown(body), env);
+      const from = tokens.findIndex(token => token.type === 'footnote_open' && token.meta?.label === footnoteLabel);
+      const end = from < 0 ? -1 : tokens.findIndex((token, index) => index > from && token.type === 'footnote_close');
+      if (end >= 0) html = MD.renderer.render(tokens.slice(from + 1, end).filter(token => token.type !== 'footnote_anchor'), MD.options, env);
+    }
   } catch (err) {
     html = `<p>${escapeHtml(String(err))}</p>`;
   }
 
-  html = metaHtml + tocHtml + html;
+  if (footnoteLabel === undefined) html = metaHtml + tocHtml + html;
 
   // Aropyt renders alerts with a bold label row ("Note", "Tip", ...) above the
   // body, and footnote references as a bare number rather than "[1]".
   const ALERT_LABELS: Record<string, string> = {
-    note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution',
+    note: uiText('注意', 'Note'), tip: uiText('提示', 'Tip'), important: uiText('重要', 'Important'), warning: uiText('警告', 'Warning'), caution: uiText('小心', 'Caution'),
   };
   html = html.replace(
     /<blockquote class="([^"]*\bmd-alert\b[^"]*)">\s*<p>/g,
     (m, cls: string) => {
       const kind = /md-alert-(note|tip|important|warning|caution)/.exec(cls)?.[1] ?? 'note';
-      const label = ALERT_LABELS[kind] ?? 'Note';
+      const label = ALERT_LABELS[kind] ?? uiText('注意', 'Note');
       return `<blockquote class="${cls}"><p class="md-alert-text md-alert-text-${kind}">` +
         `<span class="md-alert-text-container" data-text="${label}"></span></p><p>`;
     },
@@ -625,6 +672,16 @@ export function renderDocument(src: string, opts: RenderOptions = {}): RenderRes
   };
   imageResolver = null;
   return res;
+}
+
+export function renderDocument(src: string, opts: RenderOptions = {}): RenderResult {
+  return renderMarkdown(src, opts);
+}
+
+/** Parse the whole document so preview content shares reference definitions,
+ * dialect and math/image rendering with export. Drop navigation-only backrefs. */
+export function renderFootnote(src: string, label: string, opts: RenderOptions = {}): string {
+  return renderMarkdown(src, opts, label).html;
 }
 
 function decodeAttr(s: string): string {

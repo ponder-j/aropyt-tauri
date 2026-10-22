@@ -11,6 +11,7 @@ export function structureRows(kind: string, source: string): StructureRow[] | nu
   if (!quote && kind !== 'bullet_list_open' && kind !== 'ordered_list_open') return null;
   const rows: StructureRow[] = [];
   const levels: number[] = [];
+  const contentIndents = new Map<number, number>();
   const counters = new Map<number, number>();
   let offset = 0, continuationIndent = 0;
   for (const line of source.replace(/\n+$/, '').split('\n')) {
@@ -18,8 +19,11 @@ export function structureRows(kind: string, source: string): StructureRow[] | nu
     if (!match) {
       const prefix = /^[ \t]*/.exec(line)![0];
       const body = line.slice(prefix.length), previous = rows[rows.length - 1];
-      if (quote || !previous || prefix.replace(/\t/g, '    ').length < continuationIndent || !nativeParagraph(body) || /^(?:#{1,6}\s|[>|]|`{3}|~{3})/.test(body)) return null;
-      rows.push({ from: offset, to: offset + line.length, prefix: prefix.length, body, depth: previous.depth, marker: '', task: null });
+      const width = prefix.replace(/\t/g, '    ').length;
+      const parent = [...levels].reverse().find(level => (contentIndents.get(level) || continuationIndent) <= width);
+      if (quote || !previous || body && parent === undefined || !nativeParagraph(body) || /^(?:#{1,6}\s|[>|]|`{3}|~{3})/.test(body)) return null;
+      const depth = parent === undefined ? previous.depth : levels.indexOf(parent) + 1;
+      rows.push({ from: offset, to: offset + line.length, prefix: prefix.length, body, depth, marker: '', task: null });
       offset += line.length + 1; continue;
     }
     const body = line.slice(match[0].length);
@@ -32,6 +36,7 @@ export function structureRows(kind: string, source: string): StructureRow[] | nu
       const indent = match[1].replace(/\t/g, '    ').length;
       while (levels.length && levels[levels.length - 1] > indent) levels.pop();
       if (!levels.length || indent > levels[levels.length - 1]) levels.push(indent);
+      contentIndents.set(indent, /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/.exec(line)![0].replace(/\t/g, '    ').length);
       depth = levels.length;
       if (/^\d/.test(match[2])) {
         const number = counters.get(indent) ?? Number(match[2].slice(0, -1));

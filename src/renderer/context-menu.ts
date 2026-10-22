@@ -1,8 +1,9 @@
 import type { DocEditor } from './editor';
 import { blockAt, reindentCode } from './editing-commands';
-import { blockRanges, standaloneImage } from './md';
+import { blockRanges, standaloneImage, documentReferences } from './md';
 import { codeFence } from './code-fences';
-import { IMAGE_ZOOM_LEVELS, replaceImageSource } from './image-actions';
+import { tableSelection, focusTableRange } from './table-editor';
+import { IMAGE_ZOOM_LEVELS, replaceImageSource, ImageSourceRange } from './image-actions';
 
 interface Item {
   key: string; label?: string; group?: string; icon?: string; shortcut?: string;
@@ -14,8 +15,9 @@ interface Options {
   spelling: boolean; resolveImage(source: string): string;
 }
 type Invoke = <T = any>(method: string, ...args: unknown[]) => Promise<T>;
+interface RightClick { bookmark: Bookmark; image: ImageSourceRange | null; cell: HTMLElement | null }
 interface Bookmark {
-  doc: string; selection: DocEditor['view']['state']['selection']; focus: HTMLElement | null; range?: Range;
+  doc: string; selection: DocEditor['view']['state']['selection']; focus: HTMLElement | null; range?: Range; cellRange?: { from: number; to: number };
 }
 
 /** DOM menus deliberately keep focus in the editor. A menu click restores the
@@ -23,6 +25,7 @@ interface Bookmark {
 export class EditorContextMenu {
   private panels: HTMLElement[] = [];
   private current?: Bookmark;
+  private rightClick?: RightClick;
   private active?: HTMLButtonElement;
   private closeTimer?: number;
   private generation = 0;
@@ -33,30 +36,48 @@ export class EditorContextMenu {
     const dom = editor.view.dom;
     dom.addEventListener('mousedown', event => {
       // Blink otherwise moves a collapsed caret on right mouse down.
-      if (event.button === 2 && !this.input(event.target)) { event.preventDefault(); event.stopImmediatePropagation(); }
+      this.rightClick = undefined;
+      if (event.button === 2 && !this.input(event.target)) {
+        const target = event.target as HTMLElement;
+        this.rightClick = { bookmark: this.bookmark(), image: this.editor.imageAt(target), cell: target.closest('td[data-row],th[data-row]') };
+        event.preventDefault(); event.stopImmediatePropagation();
+      }
     }, true);
     dom.addEventListener('contextmenu', event => {
       if (this.input(event.target)) return;
-      event.preventDefault(); event.stopImmediatePropagation(); this.open(event);
+      event.preventDefault(); event.stopImmediatePropagation();
+      // WebKit can focus a different contenteditable even after cancelling
+      // right mousedown. Restore the selection captured before that focus.
+      const click = this.rightClick; this.rightClick = undefined;
+      if (click && !this.restore(click.bookmark)) return;
+      this.open(event, click);
     }, true);
     document.addEventListener('mousedown', event => {
       if (!this.panels.some(panel => panel.contains(event.target as Node))) this.dismiss();
     }, true);
-    document.addEventListener('keydown', event => this.keydown(event), true);
+    document.addEventListener('keydown', event => { this.rightClick = undefined; this.keydown(event); }, true);
     document.addEventListener('scroll', event => {
       if (this.panels.length && !this.panels.some(panel => panel.contains(event.target as Node))) this.dismiss();
     }, true);
     window.addEventListener('resize', () => this.dismiss());
-    window.addEventListener('blur', () => this.dismiss());
+    window.addEventListener('aropyt-language-changed', () => this.dismiss());
+    window.addEventListener('blur', () => { this.rightClick = undefined; this.dismiss(); });
   }
   private input(target: EventTarget | null): boolean { return !!(target as HTMLElement)?.closest('input,textarea,select'); }
   dismiss(): void {
     this.generation++; window.clearTimeout(this.closeTimer);
     this.panels.forEach(panel => panel.remove()); this.panels = []; this.active = undefined;
   }
-  private restore(): boolean {
-    const bookmark = this.current; if (!bookmark || bookmark.doc !== this.editor.value) return false;
+  private bookmark(): Bookmark {
+    this.editor.syncNativeSelection();
+    const native = window.getSelection();
+    return { doc: this.editor.value, selection: this.editor.view.state.selection, focus: document.activeElement as HTMLElement,
+      range: native?.rangeCount ? native.getRangeAt(0).cloneRange() : undefined, cellRange: tableSelection(this.editor.view) };
+  }
+  private restore(bookmark = this.current): boolean {
+    if (!bookmark || bookmark.doc !== this.editor.value) return false;
     if (!this.editor.view.state.selection.eq(bookmark.selection)) this.editor.view.dispatch({ selection: bookmark.selection });
+    if (bookmark.cellRange && focusTableRange(this.editor.view, bookmark.cellRange.from, bookmark.cellRange.to)) return true;
     if (bookmark.focus?.isConnected) bookmark.focus.focus({ preventScroll: true });
     if (bookmark.range?.startContainer.isConnected && bookmark.range.endContainer.isConnected) {
       const native = window.getSelection(); native?.removeAllRanges(); native?.addRange(bookmark.range);
@@ -64,17 +85,18 @@ export class EditorContextMenu {
     return true;
   }
   private command(action: string): () => unknown { return () => this.action(action); }
+  private replaceImage(range: ImageSourceRange, source: string, focus = false): void {
+    if (!this.editor.replaceImage(range, source, focus)) this.notify(this.options().lang === 'zh' ? '文稿已改变，图片引用未更新。' : 'The document changed; the image reference was not updated.', 'info');
+  }
   private async accept(item: Item): Promise<void> {
     if (item.disabled) return;
     if (item.children) { const button = this.active; if (button) this.submenu(button, item, true); return; }
     this.dismiss(); if (!this.restore()) return;
     try { await item.run?.(); } catch (error) { this.notify(String(error instanceof Error ? error.message : error), 'error'); }
   }
-  private open(event: MouseEvent): void {
-    this.dismiss(); this.editor.syncNativeSelection();
+  private open(event: MouseEvent, click?: RightClick): void {
+    this.dismiss(); this.current = this.bookmark();
     const native = window.getSelection(), target = event.target as HTMLElement;
-    this.current = { doc: this.editor.value, selection: this.editor.view.state.selection,
-      focus: document.activeElement as HTMLElement, range: native?.rangeCount ? native.getRangeAt(0).cloneRange() : undefined };
     this.point = { x: event.clientX, y: event.clientY };
     const source = this.editor.isSourceMode;
     const { lang, settings, spelling, file, resolveImage } = this.options(), zh = lang === 'zh';
@@ -87,8 +109,8 @@ export class EditorContextMenu {
     const clip = [clipboard('cut', '剪切', 'Cut', 'ty-cut'), clipboard('copy', '复制', 'Copy', 'ty-copy'),
       clipboard('paste', '粘贴', 'Paste', 'ty-paste'), clipboard('del', '删除选中内容', 'Delete Selected', 'ty-delete1')];
     if (source) { this.show(clip.slice(0, 3).map(({ icon, ...item }) => item), 'context-menu-for-source'); return; }
-    const imageRange = this.editor.imageAt(target), image = imageRange && standaloneImage(imageRange.source);
-    const cell = target.closest<HTMLElement>('td[data-row],th[data-row]'), table = cell?.closest<HTMLElement>('.md-table-widget');
+    const imageRange = click?.image || this.editor.imageAt(target), image = imageRange && standaloneImage(imageRange.source, documentReferences(this.editor.value));
+    const cell = click?.cell || target.closest<HTMLElement>('td[data-row],th[data-row]'), table = cell?.closest<HTMLElement>('.md-table-widget');
     const preview = target.closest<HTMLElement>('.cm-diagram-preview,.md-diagram,.md-math-block,.cm-inline-math-widget,.md-table-math-preview,mjx-container');
     const raw = target.closest<HTMLElement>('.md-block-widget[data-kind="html_block"],.md-block-widget[data-kind="math_block"]');
     const line = target.closest<HTMLElement>('.cm-line');
@@ -122,8 +144,8 @@ export class EditorContextMenu {
     if (image && imageRange) {
       const src = resolveImage(image.src), local = /^file:/i.test(src);
       const update = (value: string) => {
-        const updated = replaceImageSource(imageRange.source, value);
-        this.editor.view.dispatch({ changes: { from: imageRange.from, to: imageRange.to, insert: updated }, userEvent: 'input' });
+        const updated = replaceImageSource(imageRange.source, value, documentReferences(this.editor.value));
+        this.replaceImage(imageRange, updated);
       };
       const transfer = (mode: string) => async () => { const value = await this.invoke<string | null>('images.transfer', src, mode, file); if (value) update(value); };
       group('image', [
@@ -139,15 +161,15 @@ export class EditorContextMenu {
           { key: 'image:html', label: 'HTML <img src="src" alt="alt" />', checked: image.kind === 'html', run: this.command('image:html') }] },
         { key: local ? 'delete-img-file' : 'delete-img', label: text(local ? '删除图片文件' : '删除图片', local ? 'Delete Image File' : 'Delete Image'),
           run: async () => { if (local && !await this.invoke('images.trash', src)) return;
-            this.editor.view.dispatch({ changes: { from: imageRange.from, to: imageRange.to, insert: '' }, userEvent: 'delete' }); } }, sep(),
+            this.replaceImage(imageRange, '', true); } }, sep(),
       ]);
       clip.forEach(item => item.disabled = true);
     }
     if (video) group('video', [{ key: 'play', label: text('播放', 'Play'), run: () => video.play() }, { key: 'pause', label: text('暂停', 'Pause'), run: () => video.pause() }, sep()]);
-    if (href) group('hyperlink', [{ key: 'jumpto', label: text('打开链接', 'Open Link'), shortcut: mod + 'Click', run: () => this.openLink(href) }, sep()]);
+    if (href) group('hyperlink', [{ key: 'jumpto', label: text('打开链接', 'Open Link'), shortcut: mod + text('单击', 'Click'), run: () => this.openLink(href) }, sep()]);
     const word = !image && !mathRoot && (!code || settings.spellcheckForCodeAndLink) && (!href || settings.spellcheckForCodeAndLink) && spelling ? this.wordAt(event) : null;
     if (selected.trim() && !selected.includes('\n') && !image && !mathRoot) group('search', [{ key: 'search-with', label: text('搜索', 'Search With'), menuId: 'search-menu', children:
-      [['Google', 'https://www.google.com/search?q='], ['Bing', 'https://www.bing.com/search?q='], ['百度', 'https://www.baidu.com/s?wd=']].map(([label, url]) => ({ key: 'search:' + label, label, run: () => this.invoke('shell.openExternal', url + encodeURIComponent(selected)) })) }, sep()]);
+      [['Google', 'https://www.google.com/search?q='], ['Bing', 'https://www.bing.com/search?q='], [text('百度', 'Baidu'), 'https://www.baidu.com/s?wd=']].map(([label, url]) => ({ key: 'search:' + label, label, run: () => this.invoke('shell.openExternal', url + encodeURIComponent(selected)) })) }, sep()]);
     if (raw && !code) group('edit-block', [{ key: 'edit', label: text('编辑', 'Edit'), shortcut: text('单击', 'Click'), run: () => raw.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })) }, clipboard('copy', '复制', 'Copy', 'ty-copy')]);
     else group('copy-paste', [{ key: 'clipboard', row: clip }]);
     if (href) group('hyperlink', [{ key: 'copy_link', label: text('复制链接地址', 'Copy Link Address'), run: () => this.invoke('clipboard.writeRich', href, '') }]);
@@ -219,7 +241,7 @@ export class EditorContextMenu {
     } else if (!raw && !mathBlock) {
       const level = block?.kind === 'heading_open' ? /^\s*(#{1,6})\s/.exec(block.text)?.[1].length || 0 : 0;
       const name = level ? text(['', '一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题'][level], 'Heading ' + level) :
-        text(block?.kind === 'fence' ? '代码块' : block?.kind === 'blockquote_open' ? '引用' : /list/.test(block?.kind || '') ? '列表' : '段落', block?.kind === 'fence' ? 'Code Fences' : 'Paragraph');
+        text(block?.kind === 'fence' ? '代码块' : block?.kind === 'blockquote_open' ? '引用' : /list/.test(block?.kind || '') ? '列表' : '段落', block?.kind === 'fence' ? 'Code Fences' : block?.kind === 'blockquote_open' ? 'Quote' : /list/.test(block?.kind || '') ? 'List' : 'Paragraph');
       group('block-style', [{ key: 'block-style', label: name, menuId: 'block-style-menu', children: [
         ...[1,2,3,4,5,6].map(n => ({ ...cmd('heading:' + n, ['', '一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题'][n], 'Heading ' + n, mod + n), checked: level === n })), sep(),
         { ...cmd('heading:0', '段落', 'Paragraph', mod + '0'), checked: level === 0 }] }]);
@@ -238,13 +260,13 @@ export class EditorContextMenu {
     if (image && imageRange) void this.imageTarget(imageRange, resolveImage(image.src), file, this.generation).catch(() => {});
     if (word) void this.spelling(word, this.generation);
   }
-  private async imageTarget(range: { from: number; to: number; source: string }, source: string, file: string | null, generation: number): Promise<void> {
+  private async imageTarget(range: ImageSourceRange, source: string, file: string | null, generation: number): Promise<void> {
     const name = await this.invoke<string | null>('images.target', source, file);
     if (!name || generation !== this.generation) return;
     const zh = this.options().lang === 'zh';
     const entry = (move: boolean): Item => ({ key: move ? 'move-img-to-target' : 'copy-img-to-target', group: 'image',
       label: (zh ? move ? '移动到 ' : '复制到 ' : move ? 'Move to ' : 'Copy to ') + name,
-      run: async () => { const value = await this.invoke<string | null>('images.transfer', source, move ? 'move-target' : 'copy-target', file); if (value) this.editor.view.dispatch({ changes: { from: range.from, to: range.to, insert: replaceImageSource(range.source, value) }, userEvent: 'input' }); } });
+      run: async () => { const value = await this.invoke<string | null>('images.transfer', source, move ? 'move-target' : 'copy-target', file); if (value) this.replaceImage(range, replaceImageSource(range.source, value, documentReferences(this.editor.value))); } });
     const target = this.panels[0]?.querySelector('[data-key="select-img-target"]');
     target?.before(this.element(entry(false), 0));
     if (/^file:/i.test(source)) target?.before(this.element(entry(true), 0));

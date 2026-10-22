@@ -24,6 +24,23 @@ export const L = {
   themes: ['主题', 'Themes'],
   help: ['帮助', 'Help'],
   projectRepository: ['项目仓库', 'Project Repository'],
+  windowMenu: ['窗口', 'Window'],
+  minimize: ['最小化', 'Minimize'],
+  zoomWindow: ['缩放', 'Zoom'],
+  toggleTabBar: ['显示标签栏', 'Show Tab Bar'],
+  selectPreviousTab: ['显示上一个标签页', 'Show Previous Tab'],
+  selectNextTab: ['显示下一个标签页', 'Show Next Tab'],
+  showAllTabs: ['显示所有标签页', 'Show All Tabs'],
+  moveTabToNewWindow: ['将标签页移到新窗口', 'Move Tab to New Window'],
+  mergeAllWindows: ['合并所有窗口', 'Merge All Windows'],
+  front: ['前置全部窗口', 'Bring All to Front'],
+  aboutApp: ['关于 Aropyt', 'About Aropyt'],
+  services: ['服务', 'Services'],
+  hide: ['隐藏 Aropyt', 'Hide Aropyt'],
+  hideOthers: ['隐藏其他', 'Hide Others'],
+  unhide: ['显示全部', 'Show All'],
+  quit: ['退出 Aropyt', 'Quit Aropyt'],
+
 
   // File
   newFile: ['新建', 'New'],
@@ -156,7 +173,7 @@ export const L = {
   footnote: ['脚注', 'Footnotes'],
   hr: ['水平分割线', 'Horizontal Line'],
   toc: ['内容目录', 'Table of Contents'],
-  frontMatter: ['YAML Front Matter', 'YAML Front Matter'],
+  frontMatter: ['YAML 元数据', 'YAML Front Matter'],
 
   // Format
   bold: ['加粗', 'Strong'],
@@ -197,10 +214,10 @@ export const L = {
   devTools: ['开发者工具', 'Toggle DevTools'],
 
   // Language switcher
-  language: ['界面语言', 'Menu Language'],
+  language: ['界面语言', 'Interface Language'],
   langAuto: ['跟随系统', 'Follow System'],
   langZh: ['中文', 'Chinese'],
-  langEn: ['English', 'English'],
+  langEn: ['英语', 'English'],
 
   // Help
   quickStart: ['快速开始', 'Quick Start'],
@@ -296,7 +313,7 @@ export const ACCEL = {
  */
 export const RENDERER_KEYS: Set<string> = new Set<string>([
   'Ctrl+Enter', 'Ctrl+Shift+Backspace', 'Ctrl+Alt+Shift+L',
-  ACCEL.undo, ACCEL.redo, ACCEL.cut, ACCEL.copy, ACCEL.paste,
+  ACCEL.undo, ACCEL.redo, 'Ctrl+Shift+Z', ACCEL.cut, ACCEL.copy, ACCEL.paste,
   ACCEL.copyMarkdown, ACCEL.pastePlain,
   ACCEL.h1, ACCEL.h2, ACCEL.h3, ACCEL.h4, ACCEL.h5, ACCEL.h6, ACCEL.paragraph,
   ACCEL.headingUp, ACCEL.headingDown,

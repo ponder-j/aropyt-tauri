@@ -1,3 +1,4 @@
+import { selectedLines } from './selected-lines';
 import type { DocEditor } from './editor';
 import { blockRanges, renderDocument } from './md';
 import { codeFence } from './code-fences';
@@ -70,7 +71,8 @@ export function rangeAction(editor: DocEditor, action: string): boolean {
 
 export function setTaskStatus(editor: DocEditor, done: boolean): void {
   const state = editor.view.state, sel = state.selection.main, changes = [];
-  for (let n = state.doc.lineAt(sel.from).number; n <= state.doc.lineAt(sel.to).number; n++) {
+  const { first, last } = selectedLines(state);
+  for (let n = first; n <= last; n++) {
     const line = state.doc.line(n), match = /^(\s*[-*+]\s+\[)[ xX](\])/.exec(line.text);
     if (match) changes.push({ from: line.from + match[1].length, to: line.from + match[1].length + 1, insert: done ? 'x' : ' ' });
   }
