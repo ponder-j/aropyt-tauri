@@ -1,0 +1,12 @@
+node_modules/
+dist/
+output/
+release/
+src-tauri/target/
+.DS_Store
+src-tauri/gen/
+._*
+resources/styles/
+resources/renderer-styles/
+resources/defaults.json
+resources/spell-languages.json

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Local editor windows only; file and system operations are mediated by Rust.",
+  "windows": ["editor-*", "preferences", "test-*"],
+  "permissions": ["core:default", "core:webview:allow-internal-toggle-devtools"]
+}

@@ -1,0 +1,7 @@
+.git
+node_modules
+dist
+release
+output
+src-tauri/target
+.DS_Store

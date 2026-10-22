@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="initial-scale=1">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>Aropyt</title>
+  <link rel="stylesheet" href="../../vendor/aropyt-lib/bootstrape/css/bootstrap.css">
+  <link rel="stylesheet" href="../../vendor/aropyt-lib/diagram/css/mermaid.css">
+  <link rel="stylesheet" href="../../vendor/styles/font-awesome-4.1.0/css/font-awesome.min.css">
+  <link rel="stylesheet" href="../../vendor/styles/ionicons-2.0.1/css/ionicons.min.css">
+  <link rel="stylesheet" href="../../vendor/styles/aropyt-icon/style.css">
+  <link rel="stylesheet" href="../../vendor/styles/aropyt-file-icon/style.css">
+  <link rel="stylesheet" href="../../vendor/styles/base.css">
+  <link rel="stylesheet" href="styles/app.css">
+  <style id="theme_css"></style>
+  <style id="user_css"></style>
+</head>
+<body class="aropyt-node custom-titlebar on-windows sidebar-hidden">
+
+  <!-- ==================== title bar (frameless window) ==================== -->
+  <header>
+    <div id="top-titlebar" class="stopselect">
+      <span id="w-titlebar-left">
+        <span class="toolbar-icon" id="w-menu-btn">
+          <span class="ty-menu-btn-area">
+            <span class="ty-menu-btn-area-sub"></span>
+            <span class="ty-menu-btn-area-sub"></span>
+            <span class="ty-menu-btn-area-sub"></span>
+          </span>
+        </span>
+        <span class="title-text" id="title-text">Aropyt</span>
+      </span>
+      <span id="w-traffic-lights">
+        <span id="w-min" class="btn toolbar-icon" title="Minimize"><span class="ty-icon ty-minimize10"></span></span>
+        <span id="w-max-group">
+          <span id="w-max" class="btn toolbar-icon" title="Maximize"><span class="ty-icon ty-maximize10"></span></span>
+          <span id="w-pin" class="btn toolbar-icon" title="Always on Top"><span class="ion-pin"></span></span>
+        </span>
+        <span id="w-unpin" class="btn toolbar-icon" title="Always on Top"><span class="ion-pin"></span></span>
+        <span id="w-restore" class="btn toolbar-icon" title="Restore"><span class="ty-icon ty-window-restore"></span></span>
+        <span id="w-close" class="btn toolbar-icon" title="Close"><span class="ty-icon ty-close10"></span></span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ============================= work area ============================= -->
+  <div id="app-body">
+
+    <!-- outline popover -->
+    <div class="dropdown-menu stopselect dropmenu" id="toc-dropmenu">
+      <div class="outline-title-wrapper">
+        <span class="outline-title">Outline</span>
+        <span class="btn fa fa-arrow-circle-left" id="pin-outline-btn"></span>
+      </div>
+      <div class="divider outline-title-divider"></div>
+      <div id="toc-content" class="outline-content" data-after-content="Outline is Empty."></div>
+    </div>
+
+    <!-- sidebar -->
+    <div class="stopselect dropmenu sidebar-menu" id="aropyt-sidebar">
+      <div class="sidebar-tabs" id="sidebar-tabs">
+        <div class="sidebar-tab" id="sidepanel-segmented-input-files" data-panel="files">文件</div>
+        <div class="sidebar-tab active" id="sidepanel-segmented-input-outline" data-panel="outline">大纲</div>
+        <div class="sidebar-tab-btn" id="sidebar-search-btn" title="搜索"><span class="ion-ios7-search-strong"></span></div>
+      </div>
+      <div class="sidebar-content" id="sidebar-content">
+        <div id="outline-content" class="outline-content sidebar-content-content active" data-after-content="Outline is Empty."></div>
+        <div id="file-library" class="sidebar-content-content" style="display:none">
+          <div id="file-library-tree" class="no-selection" data-state="empty"></div>
+          <div id="file-library-list" class="no-selection">
+            <div id="file-library-list-children" data-after-content="No Files Available"></div>
+          </div>
+        </div>
+        <div id="file-library-search" class="sidebar-content-content" style="display:none">
+          <div id="file-library-search-panel" class="ty-sidebar-search-panel">
+            <input type="search" id="file-library-search-input" placeholder="Search" aria-label="Search files" autocomplete="off">
+          </div>
+          <div id="file-library-search-result"></div>
+        </div>
+      </div>
+    </div>
+    <div id="aropyt-sidebar-resizer"><div class="aropyt-sidebar-resizer-bar"></div></div>
+
+    <!-- document -->
+    <content id="main-content">
+      <div id="md-searchpanel" class="form-inline hide">
+        <div id="searchpanel-search-group">
+          <div>
+            <div class="ty-search-panel-row">
+              <span class="input-group-addon search-type-selection btn" id="md-search-type-label"><label>Search</label></span>
+            </div>
+            <div class="ty-search-panel-row ty-replace-panel-row">
+              <span class="input-group-addon search-type-selection btn" id="md-replace-type-label"><label>Replace</label></span>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div class="ty-search-panel-row">
+              <input type="text" class="form-control" placeholder="search text" spellcheck="false" id="search-panel-input">
+              <span title="Regular Expression" id="searchpanel-regexp-option-btn" class="searchpanel-search-option-btn"><svg class="icon" style="width:20px;height:14px"><use xlink:href="#find-and-replace-icon-regexp"></use></svg></span>
+              <span title="Case Sensitive" id="searchpanel-case-option-btn" class="searchpanel-search-option-btn"><svg class="icon" style="width:20px;height:14px"><use xlink:href="#find-and-replace-icon-case"></use></svg></span>
+              <span title="Whole Word" id="searchpanel-word-option-btn" class="searchpanel-search-option-btn"><svg class="icon" style="width:20px;height:14px"><use xlink:href="#find-and-replace-icon-word"></use></svg></span>
+            </div>
+            <div class="ty-search-panel-row ty-replace-panel-row">
+              <input type="text" class="form-control" placeholder="replace with" spellcheck="false" id="search-panel-replace-input">
+            </div>
+          </div>
+          <div>
+            <div class="ty-search-panel-row">
+              <span class="input-group-addon btn" id="search-panel-prev"><span class="ion-chevron-up"></span></span>
+              <span class="input-group-addon btn" id="search-panel-next"><span class="ion-chevron-down"></span></span>
+              <span class="input-group-addon" id="search-panel-status"></span>
+              <span class="input-group-addon btn close-btn" id="search-panel-close"><span class="ion-close-round"></span></span>
+            </div>
+            <div class="ty-search-panel-row ty-replace-panel-row">
+              <span class="input-group-addon btn" id="search-panel-replaceall-btn">All</span>
+              <span class="input-group-addon btn" id="search-panel-replace-btn">Replace</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="aropyt-quick-open" style="display:none">
+        <div id="aropyt-quick-open-input">
+          <input type="text" tabindex="1" spellcheck="false" value="" placeholder="Search by file name" id="quick-open-input">
+        </div>
+        <div class="aropyt-quick-open-list" id="aropyt-quick-open-list">
+          <div class="ty-quick-open-category" id="ty-quick-open-folder-category">
+            <div class="ty-quick-open-category-title">Pinned and Recent Locations</div>
+            <div id="ty-quick-open-folder-list-inner" class="ty-quick-open-category-list-inner"></div>
+          </div>
+          <div class="ty-quick-open-category" id="ty-quick-open-recent-category">
+            <div class="ty-quick-open-category-title">Recent Files</div>
+            <div id="ty-quick-open-recent-list-inner" class="ty-quick-open-category-list-inner"></div>
+          </div>
+          <div class="ty-quick-open-category" id="ty-quick-open-infolder-category">
+            <div class="ty-quick-open-category-title">File Results</div>
+            <div class="aropyt-quick-open-list-inner"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="md-notification-container"><div id="md-notification"></div></div>
+
+      <div id="write" class="ty-before-first-render"><div id="md-editor"></div></div>
+    </content>
+    <!-- ============================== status bar ============================= -->
+    <footer id="ty-footer" class="ty-footer">
+      <div class="footer-left">
+        <button type="button" class="footer-item footer-btn" id="footer-sidebar-btn" title="显示 / 隐藏侧边栏" aria-label="显示 / 隐藏侧边栏" aria-pressed="false"><i class="fa fa-circle-o" aria-hidden="true"></i></button>
+        <button type="button" class="footer-item footer-btn" id="toggle-sourceview-btn" title="启用源代码模式" aria-label="启用源代码模式" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 5 1 10 6 15M14 5 19 10 14 15M12 4 8 16"/></svg></button>
+      </div>
+      <div class="footer-right">
+        <button type="button" class="footer-item footer-btn" id="footer-spell-check" title="拼写检查" aria-label="拼写检查" aria-haspopup="dialog" aria-expanded="false"><span class="spell-check-letter" aria-hidden="true">A</span><i class="fa fa-check" aria-hidden="true"></i></button>
+        <button type="button" class="footer-item ty-footer-word-count" id="footer-word-count" title="字数统计" aria-label="字数统计" aria-haspopup="menu" aria-expanded="false">
+          <span class="footer-word-count-label" id="footer-word-count-label">0 words</span>
+          <span class="footer-count-arrows" aria-hidden="true"><i class="ion-chevron-up"></i><i class="ion-chevron-down"></i></span>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <svg style="position:absolute;width:0;height:0" aria-hidden="true">
+    <defs>
+      <symbol id="find-and-replace-icon-case" viewBox="0 0 20 14"><text x="1" y="11" font-size="12" font-family="sans-serif">Aa</text></symbol>
+      <symbol id="find-and-replace-icon-word" viewBox="0 0 20 14"><text x="1" y="10" font-size="10" font-family="sans-serif">ab</text><rect x="0" y="11.5" width="16" height="1.6"></rect></symbol>
+      <symbol id="find-and-replace-icon-regexp" viewBox="0 0 20 14"><text x="0" y="11" font-size="11" font-family="monospace">.*</text></symbol>
+    </defs>
+  </svg>
+
+  <script src="app.js"></script>
+</body>
+</html>
