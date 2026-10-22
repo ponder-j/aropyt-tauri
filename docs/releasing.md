@@ -22,7 +22,24 @@ npm run package:linux
 
 ## 自动化
 
-GitHub Actions 在 macOS Apple Silicon 与 Linux ARM 原生环境检查类型、构建 Rust、运行真实 WebView 回归及打包。Windows x64 和 Linux x64 的发行包还需在对应环境运行以下检查。Linux 图形检查使用 Xvfb。测试使用临时配置，Pandoc 单独安装；可选词典测试需要网络。
+普通分支推送和 PR 继续运行 macOS Apple Silicon / Linux ARM 验证。`.github/workflows/release.yml` 在推送 `v*` 版本 tag 时自动构建和发布 Windows x64 与 Docker Linux x64：
+
+1. 校验 tag 与 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json` 中的版本完全一致。
+2. Windows 2022 x64 构建 NSIS，静默安装后对已安装程序运行完整 WebView 回归，最后卸载测试安装。
+3. Ubuntu x64 runner 使用 `tools/linux.Dockerfile` 构建 Debian 12 amd64 镜像；在容器内构建 DEB / AppImage，分别运行已安装 DEB 和 AppImage 的完整回归。
+4. 两平台成功后，再核对三个安装包的哈希、测试平台、检查数量及源码提交，汇总测试证据和 SHA-256 校验和。只有发布任务拥有 `contents: write`，使用内置 `GITHUB_TOKEN` 创建草稿、上传全部附件后公开 Release。
+
+`v1.2.3-beta.1` 一类预发布 tag 自动标记为 prerelease；稳定版设为 latest。已公开的同名 Release 不会被覆盖。失败时保留 Actions 测试证据；重跑可以恢复尚未公开的草稿。Actions 页的 **Release x64 → Run workflow** 执行相同构建、测试、附件汇总，但不创建或修改 Release，最终文件可从 `release-files` artifact 下载。
+
+发布新版本时，先同步上述五个文件（`npm version 1.0.1 --no-git-tag-version` 可更新 npm 的两个文件，Rust 锁文件用 Cargo 更新），提交后推送对应 tag：
+
+```sh
+git tag -a v1.0.1 -m "Aropyt 1.0.1"
+git push origin main
+git push origin v1.0.1
+```
+
+Linux 图形检查使用 Xvfb；测试使用临时配置。Pandoc 单独安装，可选词典测试需要网络。Windows 发行包暂未配置签名证书。
 
 本机 Linux 复现环境：
 

@@ -1,0 +1,188 @@
+name: Release x64
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - id: version
+        run: node tools/release.mjs metadata
+      - run: npm ci
+      - run: node --test tools/release-test.mjs
+
+  windows:
+    needs: metadata
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          choco install pandoc webview2-runtime --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "C:\Program Files\Pandoc" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - run: npm ci
+      - name: Build and test Windows installer
+        shell: pwsh
+        run: ./tools/release-windows.ps1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verification-windows-x64
+          path: release/verification/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-windows-x64
+          path: release/artifacts/*-setup.exe
+          if-no-files-found: error
+
+  linux:
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build Linux x64 environment
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: tools/linux.Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: aropyt-release:ci
+          cache-from: type=gha,scope=linux-x64
+          cache-to: type=gha,scope=linux-x64,mode=max
+      - name: Build and test DEB and AppImage
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          docker run --name aropyt-release --init --platform linux/amd64 --shm-size=1g \
+            -e GITHUB_SHA="$SOURCE_COMMIT" \
+            -e CARGO_BUILD_JOBS=2 \
+            -e WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+            -e WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 \
+            -e APPIMAGE_EXTRACT_AND_RUN=1 \
+            aropyt-release:ci sh tools/release-linux.sh
+      - name: Collect container output
+        if: always()
+        run: |
+          mkdir -p release/verification release/artifacts
+          if docker container inspect aropyt-release >/dev/null 2>&1; then
+            docker cp aropyt-release:/app/release/verification/. release/verification/
+            docker cp aropyt-release:/app/release/artifacts/. release/artifacts/ || true
+            docker rm -f aropyt-release
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verification-linux-x64
+          path: release/verification/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-linux-x64
+          path: release/artifacts/
+          if-no-files-found: error
+
+  assemble:
+    needs: [metadata, windows, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-x64'
+          path: release/download
+      - name: Validate evidence and prepare release files
+        run: node tools/release.mjs assemble
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: release/publish/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [metadata, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release/publish
+      - name: Publish verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release/publish
+          sha256sum --check SHA256SUMS.txt
+          test "$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')" = "$SOURCE_COMMIT"
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > existing-release.txt 2>/dev/null; then
+            if [ "$(cat existing-release.txt)" != true ]; then
+              echo "Release $RELEASE_TAG is already published; refusing to replace it."
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "Aropyt ${RELEASE_TAG#v}" --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" ./*.exe ./*.deb ./*.AppImage ./*_verification.zip SHA256SUMS.txt --clobber
+          release_id=$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')
+          gh api "repos/$GH_REPO/releases/$release_id" \
+            --jq '.assets[] | [.name, .digest] | @tsv' > remote-assets.tsv
+          test "$(wc -l < remote-assets.tsv)" -eq 5
+          while IFS=$'\t' read -r filename digest; do
+            test -f "$filename"
+            actual=$(sha256sum "$filename" | cut -d ' ' -f 1)
+            test "$digest" = "sha256:$actual"
+          done < remote-assets.tsv
+          if [ "$PRERELEASE" = true ]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false --notes-file release-notes.md
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest --notes-file release-notes.md
+          fi
