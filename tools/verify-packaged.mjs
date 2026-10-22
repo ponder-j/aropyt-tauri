@@ -5,8 +5,19 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 const [label, binary, artifact] = process.argv.slice(2);
-if (!['windows-x64', 'linux-x64-deb', 'linux-x64-appimage'].includes(label) || !binary || !artifact) {
+const targets = {
+  'windows-x64': { platform: 'win32', arch: 'x64' },
+  'linux-x64-deb': { platform: 'linux', arch: 'x64' },
+  'linux-x64-appimage': { platform: 'linux', arch: 'x64' },
+  'linux-arm64-deb': { platform: 'linux', arch: 'arm64' },
+  'linux-arm64-appimage': { platform: 'linux', arch: 'arm64' },
+};
+const target = targets[label];
+if (!target || !binary || !artifact) {
   throw Error('Usage: node tools/verify-packaged.mjs <platform-label> <binary> <installer>');
+}
+if (process.platform !== target.platform || process.arch !== target.arch) {
+  throw Error(`Package verification requires ${target.platform}/${target.arch}`);
 }
 const output = path.join('release/verification', label);
 await mkdir(output, { recursive: true });
@@ -23,7 +34,7 @@ const code = await new Promise((resolve, reject) => { child.on('error', reject);
 await new Promise(resolve => log.end(resolve));
 if (code !== 0) process.exit(code || 1);
 const result = JSON.parse(await readFile('release/verification/test-results.json', 'utf8'));
-if (result.arch !== 'x64' || result.platform !== process.platform || result.passed.length < 84) {
+if (result.arch !== target.arch || result.platform !== target.platform || result.passed.length < 84) {
   throw Error('Incomplete or wrong-platform packaged regression results');
 }
 for (const name of ['test-results.json', 'export.pdf', 'export.png', 'export.html', 'long-export.pdf']) {

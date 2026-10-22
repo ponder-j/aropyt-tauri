@@ -63,6 +63,14 @@ npm run test:packaged
 
 安装后可用 `AROPYT_TEST_BINARY` 指定实际安装的可执行文件，再运行 `npm run test:packaged`，覆盖安装包资源和系统 WebView；配置和词典仍写入测试临时目录。发布前分别验证 Windows 安装程序、已安装的 DEB 和 AppImage，保留各自的 `release/verification/` 证据，并生成 SHA-256 校验文件。Release 标签必须指向实际构建的源码提交。
 
+## Linux ARM64 独立发布
+
+在 aarch64 主机或原生 ARM64 Docker 环境中运行 `sh tools/release-linux-arm64.sh`，生成 ARM64 DEB 和 aarch64 AppImage，并分别对已安装 DEB 和实际 AppImage 执行完整回归。该脚本需要安装 DEB 的权限；容器中使用上文所述的 Xvfb 和测试沙箱设置。
+
+也可以在仅安装运行依赖的 Debian 12 ARM64 环境中，设置 `AROPYT_TEST_BINARY=/usr/bin/aropyt` 后运行 `node tools/verify-packaged.mjs linux-arm64-deb /usr/bin/aropyt <deb路径>`。AppImage 使用 `linux-arm64-appimage` 标签；无 FUSE 的环境额外设置 `APPIMAGE_EXTRACT_AND_RUN=1`。
+
+ARM64 的独立 Release 使用 `linux-arm64-v<版本>` 标签，附件包含 DEB、AppImage、测试证据和 SHA-256 校验文件。该标签不触发现有的 `v*` x64 发布流程；本轮 ARM64 发布不要求执行 x64 验证。发布前必须确认两种安装产物均通过至少 84 项检查，且附件哈希与测试证据对应。
+
 ## 签名
 
 本地未配置发行证书时，macOS 为本地签名构建，没有 Apple 公证。正式分发应设置 Tauri 的 Apple 签名/公证环境变量；Windows 应配置代码签名。代码签名凭证只通过密钥存储或 CI Secrets 提供，不进入源码。
