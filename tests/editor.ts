@@ -17,7 +17,12 @@ const editor = new DocEditor({ parent, doc: '', host: {
   docDir: () => undefined, math: (s) => s, resolveSrc: (s) => s, enhance: () => {},
 }, onChange: () => {} });
 const view = editor.view;
-const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+// WebKit suspends animation frames when the test window is occluded or the
+// desktop is locked. Layout assertions still run against the real WebView.
+const frame = () => new Promise<void>((resolve) => {
+  const timer = setTimeout(resolve, 100);
+  requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
+});
 function assert(ok: unknown, message: string): asserts ok { if (!ok) throw new Error(message); }
 function cursor(pos: number) { view.dispatch({ selection: { anchor: pos } }); view.focus(); }
 function key(key: string, extra = {}) {

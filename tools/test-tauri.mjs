@@ -41,7 +41,9 @@ try{
  if(!flags.has('--spelling')&&!flags.has('--features')&&!flags.has('--export')){
    const output=await build({entryPoints:['tests/editor.ts'],bundle:true,write:false,platform:'browser',format:'iife'});const code=output.outputFiles[0].text;
    await js(`(async()=>{const frame=document.createElement('iframe');frame.id='regression-frame';frame.style.cssText='position:fixed;inset:0;width:1080px;height:900px;z-index:999999;background:white';document.body.append(frame);const d=frame.contentDocument;d.open();d.write('<html><head><link rel="stylesheet" href="'+new URL('/vendor/styles/base.css',location.href).href+'"><link rel="stylesheet" href="'+new URL('/vendor/styles/themes/github.css',location.href).href+'"><link rel="stylesheet" href="'+new URL('/vendor/styles/aropyt-file-icon/style.css',location.href).href+'"><link rel="stylesheet" href="'+new URL('/dist/renderer/styles/app.css',location.href).href+'"><style>body{display:block}#md-editor{height:100vh}</style></head><body><div id="md-editor"></div></body></html>');d.close();await Promise.all(Array.from(d.querySelectorAll('link'),link=>link.sheet?Promise.resolve():new Promise(resolve=>{link.onload=link.onerror=resolve})));frame.contentWindow.eval(${JSON.stringify(code)});})()`);
-   const checks=await js(`document.getElementById('regression-frame').contentWindow.runEditorTests()`);for(const item of checks)pass(item);
+   await js(`(()=>{const w=document.getElementById('regression-frame').contentWindow;w.runEditorTests().then(checks=>w.__editorChecks={checks},error=>w.__editorChecks={error:String(error)+'\\n'+String(error.stack||'')});return true})()`);
+   const result=await wait(()=>js(`document.getElementById('regression-frame').contentWindow.__editorChecks||null`),600000);
+   if(result.error)throw Error(result.error);for(const item of result.checks)pass(item);
    assert.deepEqual(await js(`document.getElementById('regression-frame').contentWindow.editorErrors()`),[]);await js(`document.getElementById('regression-frame').remove()`);
  }
  // Native filesystem/encoding/draft checks use the production dispatcher.
