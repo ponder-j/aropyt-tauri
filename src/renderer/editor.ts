@@ -490,8 +490,9 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
     const heading = b.kind === 'heading_open' && headingAt(state, startLine);
     if (heading && draftHeading === heading.line.from) {
       headingLines.add(startLine);
-      items.push({ from: heading.line.from, to: heading.line.from, deco: Decoration.line({ class: 'cm-paragraph-first cm-paragraph-last' + afterClass }) });
-      if (/[ \t]/.test(heading.line.text.slice(0, heading.bodyFrom - heading.line.from))) items.push({
+      const spaced = /[ \t]/.test(heading.line.text.slice(0, heading.bodyFrom - heading.line.from));
+      items.push({ from: heading.line.from, to: heading.line.from, deco: Decoration.line({ class: 'cm-paragraph-first cm-paragraph-last' + (spaced ? ` cm-draft-heading-${heading.level}` : '') + afterClass }) });
+      if (spaced) items.push({
         from: heading.line.from, to: heading.bodyFrom, deco: Decoration.mark({ class: 'cm-md-marker' }),
       });
       inline(heading.bodyFrom, heading.line.text.slice(heading.bodyFrom - heading.line.from));
@@ -1448,6 +1449,7 @@ export class DocEditor {
       const px = (value: string) => parseFloat(value) || 0;
       const selector = `.cm-editor.aropyt-document-editor .cm-line.cm-heading.cm-header-${index + 1}`;
       css.push(`${selector}{font-size:${s.fontSize};font-weight:${s.fontWeight};line-height:${s.lineHeight};letter-spacing:${s.letterSpacing};margin:0;border:0;position:relative;padding:calc(max(0px,${px(s.marginTop)}px - var(--cm-previous-margin,0px)) + ${px(s.paddingTop)}px) ${s.paddingRight} ${px(s.marginBottom) + px(s.paddingBottom) + px(s.borderBottomWidth)}px ${s.paddingLeft};}`);
+      css.push(`.cm-editor.aropyt-document-editor .cm-line.cm-draft-heading-${index + 1}{font-weight:${s.fontWeight};}`);
       css.push(`.cm-editor.aropyt-document-editor .cm-after-heading-${index + 1}{--cm-previous-margin:${s.marginBottom};}`);
       css.push(`${selector}::after{content:"";position:absolute;left:${s.paddingLeft};right:${s.paddingRight};bottom:${s.marginBottom};border-bottom:${s.borderBottomWidth} ${s.borderBottomStyle} ${s.borderBottomColor};pointer-events:none;}`);
     });

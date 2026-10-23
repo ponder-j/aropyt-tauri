@@ -588,6 +588,7 @@ async function openFile(file: string, confirmed = false): Promise<void> {
 
 async function saveFile(saveAs = false): Promise<boolean> {
   let target = state.file;
+  try {
   if (!target || saveAs) {
     const configured = settings.defaultExtension === 'custom' ? settings.customExtension : settings.defaultExtension;
     const extension = /^\.[a-z0-9]+$/i.test(String(configured)) ? String(configured) : '.md';
@@ -608,6 +609,15 @@ async function saveFile(saveAs = false): Promise<boolean> {
   await invoke('setting.updateRecentFile', target);
   refreshFileTree();
   return true;
+  } catch (error) {
+    await invoke('dialog.showMessageBox', {
+      type: 'error', title: () => uiText('保存失败', 'Save failed'),
+      message: () => uiText('无法保存文档，您的更改仍保留在编辑器中。', 'The document could not be saved. Your changes remain in the editor.'),
+      detail: (target || uiText('未保存的文档', 'Unsaved document')) + '\n\n' + String(error instanceof Error ? error.message : error),
+      buttons: [() => uiText('确定', 'OK')], defaultId: 0, cancelId: 0,
+    });
+    return false;
+  }
 }
 
 let saveConfirmation: Promise<boolean> | undefined;
@@ -879,7 +889,14 @@ async function runAction(action: string, arg?: unknown): Promise<unknown> {
       if (result) {
         const columns = Math.min(30, Math.max(1, Number(result.columns) || 3)), rows = Math.min(100, Math.max(1, Number(result.rows) || 3));
         const row = '| ' + Array(columns).fill(' ').join(' | ') + ' |\n';
-        insertBlock(row + '| ' + Array(columns).fill('---').join(' | ') + ' |\n' + row.repeat(rows - 1));
+        const snippet = row + '| ' + Array(columns).fill('---').join(' | ') + ' |\n' + row.repeat(rows - 1) + '\n';
+        const view = editor.view, from = view.state.selection.main.from;
+        const tableFrom = from + (from === view.state.doc.lineAt(from).from ? 0 : 1);
+        insertBlock(snippet, snippet.length);
+        queueMicrotask(() => {
+          const table = Array.from(view.dom.querySelectorAll<HTMLElement>('.md-table-widget')).find(node => Number(node.dataset.from) === tableFrom);
+          table?.querySelector<HTMLElement>('[data-row="0"][data-col="0"]')?.focus();
+        });
       }
       break;
     }

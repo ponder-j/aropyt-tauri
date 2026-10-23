@@ -653,9 +653,13 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
       for (let n = 0; n < level; n++) insert('#');
       await frame();
       assert(!parent.querySelector('.cm-heading') && view.contentDOM.innerText.includes('#'.repeat(level)), 'Typing hashes immediately rendered a heading');
+      assert(getComputedStyle(view.contentDOM.querySelector('.cm-line')!).fontWeight === getComputedStyle(view.contentDOM).fontWeight, 'A bare hash acquired heading weight before the space');
       insert(' '); insert('Title'); await frame();
       const draft = view.contentDOM.querySelector<HTMLElement>('.cm-line')!;
       assert(draft.textContent === '#'.repeat(level) + ' Title' && getComputedStyle(draft).fontSize === fontSize, 'Draft heading hid its prefix or used heading size');
+      const reference = document.createElement('h' + level); parent.append(reference);
+      assert(getComputedStyle(draft).fontWeight === getComputedStyle(reference).fontWeight, 'Draft heading lost the theme heading weight while keeping paragraph size');
+      reference.remove();
       assert(draft.querySelector('.cm-md-marker')?.textContent === '#'.repeat(level) + ' ', 'Draft heading prefix did not become a muted marker');
       cursor(level); key('ArrowLeft');
       assert(view.state.selection.main.head === level - 1, 'Draft heading prefix trapped the caret');

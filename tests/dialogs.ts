@@ -63,6 +63,50 @@ const button = (dialog: HTMLDialogElement, index: number) => dialog.querySelecto
     } finally { api.state.dirty = dirty; api.state.file = file; }
     passed.push('Actual save confirmations deduplicate close requests, isolate editor shortcuts and preserve edits when Save As is cancelled');
 
+    const realInvoke = window.JSBridge.invoke;
+    const failedPath = '/Users/example/中文 & readonly.md';
+    try {
+      api.state.file = failedPath; api.state.dirty = true;
+      window.JSBridge.invoke = async (method, ...args) => {
+        if (method === 'document.setContent') throw new Error('Permission denied (os error 13)');
+        return realInvoke(method, ...args);
+      };
+      for (const closeRequest of [false, true]) {
+        const pending = closeRequest ? api.confirmSave() : api.runAction('save');
+        if (closeRequest) button(await opened(), 0).click();
+        const failure = await opened();
+        assert(failure.getAttribute('role') === 'alertdialog' && /保存失败|Save failed/.test(failure.querySelector('h2')?.textContent || ''), 'A failed save did not display an application error dialog');
+        assert(failure.querySelector('.dialog-detail')?.textContent?.includes(failedPath) && failure.textContent?.includes('Permission denied'), 'The save error lost its path or native diagnostic');
+        button(failure, 0).click();
+        assert(await pending === false && api.state.dirty && api.state.file === failedPath && api.getEditor().value === source, 'A failed save closed the document, changed its path or lost unsaved edits');
+      }
+    } finally { window.JSBridge.invoke = realInvoke; api.state.file = file; api.state.dirty = dirty; }
+    passed.push('Native save failures show an application error and keep unsaved edits open for both Save and close confirmation');
+
+    try {
+      const editor = api.getEditor();
+      editor.setValue('Before\n\nAfter'); editor.view.dispatch({ selection: { anchor: 8 } }); editor.focus();
+      const inserting = api.runAction('insertTable');
+      const dialog = await opened();
+      dialog.querySelector<HTMLInputElement>('[name=columns]')!.value = '2';
+      dialog.querySelector<HTMLInputElement>('[name=rows]')!.value = '2';
+      button(dialog, 1).click(); await inserting;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      assert(document.activeElement?.matches('.md-table-widget [data-row="0"][data-col="0"]'), 'Confirming Insert Table did not focus its first cell');
+      assert(editor.view.dom.querySelectorAll('.md-table-widget [data-source-from]').length === 4, 'The new table swallowed the following paragraph');
+      document.execCommand('insertText', false, 'First');
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true, cancelable: true }));
+      document.execCommand('insertText', false, 'Second');
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      assert(editor.value.includes('| First | Second |') && editor.value.startsWith('Before\n\n') && editor.value.endsWith('After'), 'Immediate typing or Tab edited the surrounding paragraph instead of the new table');
+    } finally {
+      api.getEditor().loadDocument(source);
+      api.getEditor().view.dispatch({ selection: JSON.parse(selection) });
+      api.state.dirty = dirty;
+    }
+    passed.push('Insert Table focuses the first cell so immediate typing and Tab stay inside the new table');
+
     const first = invoke('dialog.showMessageBox', { message: 'First queued notice' });
     const second = invoke('dialog.showMessageBox', { message: 'Second queued notice' });
     const firstDialog = await opened();
