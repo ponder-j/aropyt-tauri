@@ -54,6 +54,9 @@ export async function runStartupEventChecks(): Promise<string[]> {
       localFileUrl: (...args: unknown[]) => parentBridge.localFileUrl(...args),
       invoke: async (method: string, ...args: unknown[]) => {
         if (method === 'setting.getAll') return { ...settings };
+        // WebView2's about:blank frame can inherit the parent's launch query.
+        // Keep that document lookup inside the empty, isolated startup fixture.
+        if (method === 'document.getContent') return null;
         if (method === 'menu.dump') return { lang: 'en', pref: 'en', locale: 'en-US', lines: [] };
         if (method === 'theme.getCss') {
           themeRequested = true;
@@ -70,8 +73,9 @@ export async function runStartupEventChecks(): Promise<string[]> {
     };
     child.eval(productionApp);
     child.dispatchEvent(new child.Event('DOMContentLoaded'));
-    await startupWait(() => themeRequested || errors.length > 0, 'Production boot did not reach the deferred theme read');
+    await startupWait(() => themeRequested || errors.length > 0 || !!doc.querySelector('body > pre'), 'Production boot did not reach the deferred theme read');
     startupAssert(!errors.length, errors.join('\n'));
+    startupAssert(!doc.querySelector('body > pre'), 'Startup fixture failed before its theme read: ' + doc.body.innerText);
     startupAssert(doc.getElementById('spell-check-popover') && listeners.length > 0 && !child.__aropyt,
       'Startup events were not injected after component subscription and before boot completion');
     startupAssert(!(doc.getElementById('footer-word-count') as HTMLElement).hidden,

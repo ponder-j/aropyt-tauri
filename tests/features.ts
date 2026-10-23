@@ -147,6 +147,8 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
   passed.push('File list/tree, search toolbar modes, focus, whole-word counts and replace-all undo');
 
   const openTableImageMenu = async () => {
+    await bridge.invoke('window.focus');
+    await featureWait(() => document.hasFocus());
     await featureWait(() => !!document.querySelector('.md-table-image-preview img'));
     const other = document.querySelector<HTMLElement>('td[data-col="1"]')!; other.focus();
     const selection = document.createRange(); selection.selectNodeContents(other.querySelector('.cm-md-strong') || other); window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(selection);
@@ -157,7 +159,7 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
     image.closest<HTMLElement>('td,th')!.focus();
     await new Promise(resolve => setTimeout(resolve, 30));
     image.dispatchEvent(new MouseEvent('contextmenu', { button: 2, clientX: 120, clientY: 120, bubbles: true, cancelable: true }));
-    featureAssert(window.getSelection()?.toString() === 'other' && document.activeElement === other, 'Image right-click moved another cell selection');
+    featureAssert(window.getSelection()?.toString() === 'other' && document.activeElement === other, 'Image right-click moved another cell selection: ' + JSON.stringify({ selection: window.getSelection()?.toString(), focus: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0,250), connected: other.isConnected }));
     featureAssert(document.querySelector('#context-menu button[data-key="zoom-img"]') && document.querySelector('#context-menu button[data-key="table"]'), 'Table image menu lost image or table actions');
   };
   const imageMenuSource = '| A   | B |\n| :--- | ---: |\n| Before **bold** ![alt](sized.svg) after   | **other**  |\n\nTail';

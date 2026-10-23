@@ -97,7 +97,7 @@ fn request(mut stream: TcpStream, app: AppHandle, token: &str) -> Result<()> {
             }
             "menu-event" => crate::menus::dispatch_label(&app, &win, req["label"].as_str().unwrap_or("")),
             #[cfg(target_os = "macos")]
-            "native-menu" => crate::native::menu_snapshot(req["preview"] == true),
+            "native-menu" => crate::menus::mac_snapshot(req["preview"] == true),
             #[cfg(target_os = "linux")]
             "native-menu" => crate::menus::gtk_snapshot(&app, &win),
             "new" => Ok(json!(new_window(

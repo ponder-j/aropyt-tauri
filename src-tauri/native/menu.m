@@ -22,8 +22,14 @@ static char shortcutDelegateKey, shortcutItemKey;
 - (void)setShortcutsVisible:(BOOL)visible {
     for (NSDictionary *shortcut in self.shortcuts) {
         NSMenuItem *item=shortcut[@"item"];
-        item.keyEquivalent=visible ? shortcut[@"key"] : @"";
-        item.keyEquivalentModifierMask=visible ? [shortcut[@"modifiers"] unsignedIntegerValue] : 0;
+        if (visible) {
+            // Apply modifiers first so a transient bare Q cannot collide with Quit.
+            item.keyEquivalentModifierMask=[shortcut[@"modifiers"] unsignedIntegerValue];
+            item.keyEquivalent=shortcut[@"key"];
+        } else {
+            item.keyEquivalent=@"";
+            item.keyEquivalentModifierMask=0;
+        }
     }
 }
 - (void)menuWillOpen:(NSMenu *)menu {

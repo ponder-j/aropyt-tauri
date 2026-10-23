@@ -126,7 +126,7 @@ try{
  }
  if(!flags.has('--editor')&&!flags.has('--spelling')){
   await invoke('window.focus');
-  await verifyNativeLanguage({invoke,js,snapshot:()=>call({op:'native-menu'})});
+  await verifyNativeLanguage({invoke,js,snapshot:process.platform==='win32'?undefined:()=>call({op:'native-menu'})});
   pass('Native menus, app dialogs and error messages follow the selected language while preserving paths and commands');
   const output=await build({entryPoints:['tests/localization.ts'],bundle:true,write:false,platform:'browser'});
   await js(`(0,eval)(${JSON.stringify(output.outputFiles[0].text)})`);

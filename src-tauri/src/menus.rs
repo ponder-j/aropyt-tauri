@@ -131,6 +131,11 @@ fn build(
 // Keep replacement and display-only shortcut installation in one sequence;
 // otherwise one refresh can capture another menu's already-cleared keys.
 static INSTALL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(target_os = "macos")]
+pub fn mac_snapshot(preview: bool) -> Result<Value> {
+    let _install = INSTALL.lock().map_err(err)?;
+    crate::native::menu_snapshot(preview)
+}
 pub fn dispatch_event(app: &AppHandle, win: &WebviewWindow, id: &str) -> Option<Value> {
     let action = app.state::<AppState>().menu_actions.lock().unwrap().get(id).cloned()?;
     crate::send(win, action.clone());
