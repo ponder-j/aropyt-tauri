@@ -282,6 +282,10 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
   }
   passed.push('Nine Pandoc export actions complete with rendered Mermaid while its code is active');
 
+  // Hidden native export windows can temporarily change Windows' active window.
+  // Synthetic DOM clicks do not perform the OS activation that a real click does.
+  await bridge.invoke('window.focus');
+  await featureWait(() => document.hasFocus());
   await api.runAction('showFileList');
   featureAssert(document.querySelector('.file-list-card .file-card-extension')?.textContent === '.md' && Array.from(document.querySelectorAll('.file-card-preview')).some(node => node.textContent?.includes('Nested document')), 'Document list lost extensions or real file summaries');
   document.getElementById('sidebar-menu-btn')!.click();

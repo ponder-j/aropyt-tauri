@@ -36,6 +36,19 @@ static char shortcutDelegateKey, shortcutItemKey;
 }
 @end
 
+static NSString *shortcutKey(NSString *accelerator) {
+    NSString *key=[accelerator componentsSeparatedByString:@"+"].lastObject;
+    if (key.length==1) return key.lowercaseString;
+    if ([key hasPrefix:@"F"]) {
+        NSInteger number=[[key substringFromIndex:1] integerValue];
+        if (number>=1 && number<=24) {
+            unichar character=NSF1FunctionKey+number-1;
+            return [NSString stringWithCharacters:&character length:1];
+        }
+    }
+    return @{@"Backspace":@"\b",@"Delete":@"\177",@"Enter":@"\r",@"Tab":@"\t",@"Space":@" "}[key] ?: @"";
+}
+
 static void installHints(NSMenu *menu, NSArray *entries) {
     NSMutableArray *shortcuts=[NSMutableArray new];
     for (NSUInteger index=0;index<MIN(entries.count,(NSUInteger)menu.numberOfItems);index++) {
@@ -51,7 +64,10 @@ static void installHints(NSMenu *menu, NSArray *entries) {
         BOOL displayOnly=[entry[@"registerAccelerator"] isEqual:@NO] ||
             [@[@"Ctrl+A",@"CommandOrControl+A"] containsObject:accelerator];
         if (!displayOnly) continue;
-        NSDictionary *shortcut=@{@"item":item,@"key":item.keyEquivalent,@"modifiers":@(item.keyEquivalentModifierMask)};
+        // AppKit can clear a conflicting equivalent while a menu is installed.
+        // Recover its display hint from the immutable template in that case.
+        NSString *key=item.keyEquivalent.length ? item.keyEquivalent : shortcutKey(accelerator);
+        NSDictionary *shortcut=@{@"item":item,@"key":key,@"modifiers":@(item.keyEquivalentModifierMask)};
         [shortcuts addObject:shortcut];
         objc_setAssociatedObject(item,&shortcutItemKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
