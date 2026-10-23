@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Installer, [switch]$InstallUpdate)
+param([Parameter(Mandatory=$true)][string]$Installer, [switch]$InstallUpdate, [switch]$SkipApplicationTests)
 $ErrorActionPreference = 'Stop'
 $installerFile = Get-Item -LiteralPath $Installer
 $installDirectory = Join-Path ([IO.Path]::GetTempPath()) ('aropyt-release-' + [Guid]::NewGuid().ToString('N'))
@@ -20,8 +20,10 @@ try {
     $process = Start-Process -FilePath $installerFile.FullName -ArgumentList @('/S','/UPDATE','/NS',('/D=' + $installDirectory)) -WindowStyle Hidden -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
     $binary = Join-Path $installDirectory 'aropyt.exe'
-    node tools/verify-packaged.mjs windows-x64 $binary $installerFile.FullName
-    if ($LASTEXITCODE -ne 0) { throw 'Installed Windows application regression failed' }
+    if (-not $SkipApplicationTests) {
+        node tools/verify-packaged.mjs windows-x64 $binary $installerFile.FullName
+        if ($LASTEXITCODE -ne 0) { throw 'Installed Windows application regression failed' }
+    }
     $updateArgs = @('tools/test-updater.mjs', $binary, $installerFile.FullName)
     if ($InstallUpdate) { $updateArgs += '--install' }
     node @updateArgs
