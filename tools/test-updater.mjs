@@ -22,7 +22,8 @@ let logs = '';
 for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { logs += data; });
 let windowLabel;
 const call = async payload => {
-  const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify({ window: windowLabel, ...payload }), signal: AbortSignal.timeout(30000) });
+  const timeout = payload.method === 'update.download' ? 630000 : 30000;
+  const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify({ window: windowLabel, ...payload }), signal: AbortSignal.timeout(timeout) });
   const result = await response.json(); if (!result.ok) throw Error(result.error); return result.value;
 };
 const invoke = (method, ...args) => call({ op: 'invoke', method, args });
