@@ -9,10 +9,18 @@ export class WindowsMenu {
   private panels: HTMLElement[] = [];
   private entries: Entry[] = [];
   private active = -1;
+  private scale = 1;
   private restoreFocus?: HTMLElement;
   constructor(private dispatch: (entry: Entry) => void) {
     this.bar.id = 'aropyt-menubar'; this.bar.setAttribute('role', 'menubar');
     document.body.prepend(this.bar);
+    const syncScale = () => {
+      const scale = Number(document.body.style.zoom) || 1;
+      if (scale !== this.scale) this.close(false);
+      this.scale = scale; this.bar.style.zoom = String(1 / scale);
+    };
+    new MutationObserver(syncScale).observe(document.body, { attributes: true, attributeFilter: ['style'] });
+    syncScale();
     document.addEventListener('pointerdown', event => {
       if (!this.bar.contains(event.target as Node) && !this.panels.some(p => p.contains(event.target as Node))) this.close(false);
     }, true);
@@ -55,6 +63,7 @@ export class WindowsMenu {
   private panel(entries: Entry[], anchor: HTMLElement, level: number, focus = false): void {
     this.panels.splice(level).forEach(p => p.remove());
     const panel = document.createElement('div'); panel.className = 'aropyt-app-menu'; panel.setAttribute('role', 'menu');
+    panel.style.zoom = String(1 / this.scale);
     for (const entry of entries) {
       if (entry.type === 'separator') { const separator = document.createElement('div'); separator.className = 'aropyt-menu-separator'; separator.setAttribute('role', 'separator'); panel.append(separator); continue; }
       const button = this.button(entry); button.className = 'aropyt-app-menu-item'; button.tabIndex = -1;

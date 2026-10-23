@@ -21,6 +21,17 @@ export async function runWindowsMenuChecks(): Promise<string[]> {
     (bar.children[1] as HTMLButtonElement).click(); panel = document.querySelector('.aropyt-app-menu')!;
     check(!/[⌘⌥⇧⌃]/.test(panel.textContent || ''), 'macOS symbols remain in Windows menus');
     check(panel.textContent?.includes('Ctrl+Shift+C'), 'Windows shortcut column missing'); key('Escape');
+    const zoom = document.body.style.zoom;
+    try {
+      for (const scale of [0.75, 1.25, 1.5]) {
+        document.body.style.zoom = String(scale); await frame();
+        check(Math.abs(bar.getBoundingClientRect().height - 26) < 1, 'Document zoom changed menu bar height');
+        (bar.children[0] as HTMLButtonElement).click();
+        const rect = document.querySelector('.aropyt-app-menu')!.getBoundingClientRect();
+        check(rect.width >= 240 && rect.width < 241 && rect.top >= 25 && rect.bottom <= innerHeight, 'Zoomed menu moved offscreen or changed size');
+        key('Escape');
+      }
+    } finally { document.body.style.zoom = zoom; await frame(); }
     editor.setValue('word'); editor.view.dispatch({ selection: { anchor: 0, head: 4 } }); editor.focus();
     key('~', 'Backquote', { ctrlKey: true, shiftKey: true }); await frame();
     check(editor.value === '`word`', 'Ctrl+Shift+Backquote failed with the Windows shifted key value');
