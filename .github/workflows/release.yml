@@ -162,6 +162,10 @@ jobs:
           cd release/publish
           sha256sum --check SHA256SUMS.txt
           test "$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')" = "$SOURCE_COMMIT"
+          if gh release view "$RELEASE_TAG" --json body --jq '.body' 2>/dev/null | grep -Fq '<!-- aropyt-unified-release -->'; then
+            echo "x64 artifacts verified; publication is managed by the unified four-platform release."
+            exit 0
+          fi
           if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > existing-release.txt 2>/dev/null; then
             if [ "$(cat existing-release.txt)" != true ]; then
               echo "Release $RELEASE_TAG is already published; refusing to replace it."

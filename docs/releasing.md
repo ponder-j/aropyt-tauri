@@ -71,6 +71,10 @@ npm run test:packaged
 
 ARM64 的独立 Release 使用 `linux-arm64-v<版本>` 标签，附件包含 DEB、AppImage、测试证据和 SHA-256 校验文件。该标签不触发现有的 `v*` x64 发布流程；本轮 ARM64 发布不要求执行 x64 验证。发布前必须确认两种安装产物均通过至少 84 项检查，且附件哈希与测试证据对应。
 
+## 四平台统一发布
+
+需要将 macOS ARM64、Linux ARM64、Windows x64 和 Linux x64 汇总到同一 Release 时，在草稿说明中加入 `<!-- aropyt-unified-release -->`。标签触发的 x64 流程仍完整构建、安装测试并汇总证据，发布步骤识别该标记后把附件汇总与公开操作交给统一发布流程，避免覆盖其他平台附件。统一发布必须校验六个安装包的源码提交、测试结果及哈希，再上传全部附件并核对 GitHub 返回的 SHA-256 后公开。
+
 ## 签名
 
 本地未配置发行证书时，macOS 为本地签名构建，没有 Apple 公证。正式分发应设置 Tauri 的 Apple 签名/公证环境变量；Windows 应配置代码签名。代码签名凭证只通过密钥存储或 CI Secrets 提供，不进入源码。

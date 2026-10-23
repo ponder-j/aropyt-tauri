@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { metadata, assemble } from './release.mjs';
 
 const commit = 'a'.repeat(40);
@@ -33,6 +35,22 @@ test('tag version and all package/lock versions must agree before building', asy
 test('prerelease tags remain distinguishable from stable releases', async t => {
   const root = await fixture(t, '2.0.0-beta.1');
   assert.deepEqual(await metadata(root, 'refs/tags/v2.0.0-beta.1'), { version: '2.0.0-beta.1', tag: 'v2.0.0-beta.1', prerelease: true });
+});
+
+test('fixture metadata ignores ambient CI tags while CLI commands validate them', async t => {
+  const root = await fixture(t);
+  const module = new URL('./release.mjs', import.meta.url);
+  const env = { ...process.env, GITHUB_REF: 'refs/tags/v9.9.9' };
+  const library = spawnSync(process.execPath, ['--input-type=module', '--eval',
+    `import { metadata } from ${JSON.stringify(module.href)}; console.log(JSON.stringify(await metadata(${JSON.stringify(root)})));`],
+    { env, encoding: 'utf8' });
+  assert.equal(library.status, 0, library.stderr);
+  assert.equal(JSON.parse(library.stdout).version, '1.2.3');
+  for (const command of ['metadata', 'assemble']) {
+    const cli = spawnSync(process.execPath, [fileURLToPath(module), command], { cwd: root, env, encoding: 'utf8' });
+    assert.notEqual(cli.status, 0);
+    assert.match(cli.stderr, /Tag refs\/tags\/v9\.9\.9 must match v1\.2\.3/);
+  }
 });
 
 test('publication requires all three matching artifacts and evidence from this commit', async t => {

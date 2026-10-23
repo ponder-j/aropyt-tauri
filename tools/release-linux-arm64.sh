@@ -11,6 +11,6 @@ deb="$bundle/deb/Aropyt_${version}_arm64.deb"
 appimage="$bundle/appimage/Aropyt_${version}_aarch64.AppImage"
 test "$(dpkg-deb --field "$deb" Architecture)" = arm64
 dpkg -i "$deb"
-xvfb-run -a node tools/verify-packaged.mjs linux-arm64-deb /usr/bin/aropyt "$deb"
-APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a node tools/verify-packaged.mjs linux-arm64-appimage "$appimage" "$appimage"
+dbus-run-session -- xvfb-run -a node tools/verify-packaged.mjs linux-arm64-deb /usr/bin/aropyt "$deb"
+APPIMAGE_EXTRACT_AND_RUN=1 dbus-run-session -- xvfb-run -a node tools/verify-packaged.mjs linux-arm64-appimage "$appimage" "$appimage"
 cp "$deb" "$appimage" release/artifacts/

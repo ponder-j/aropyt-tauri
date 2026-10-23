@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-export async function metadata(root = '.', ref = process.env.GITHUB_REF || '') {
+export async function metadata(root = '.', ref = '') {
   const pkg = await json(path.join(root, 'package.json'));
   const lock = await json(path.join(root, 'package-lock.json'));
   const tauri = await json(path.join(root, 'src-tauri/tauri.conf.json'));
@@ -72,10 +72,11 @@ export async function assemble(root = '.', commit = process.env.GITHUB_SHA) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const command = process.argv[2];
   if (command === 'metadata') {
-    const result = await metadata();
+    const result = await metadata('.', process.env.GITHUB_REF || '');
     if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, Object.entries(result).map(([k, v]) => `${k}=${v}\n`).join(''));
     console.log(JSON.stringify(result, null, 2));
   } else if (command === 'assemble') {
+    await metadata('.', process.env.GITHUB_REF || '');
     console.log(JSON.stringify(await assemble(), null, 2));
   } else throw Error('Usage: node tools/release.mjs <metadata|assemble>');
 }
