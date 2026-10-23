@@ -17,7 +17,9 @@ const server = net.createServer(); await new Promise(resolve => server.listen(0,
 const port = server.address().port; await new Promise(resolve => server.close(resolve));
 const token = randomBytes(32).toString('hex');
 const expectedHash = createHash('sha256').update(await readFile(binary)).digest('hex');
-const child = spawn(binary, [file], { env: { ...process.env, AROPYT_DATA_DIR: path.join(work, 'profile'), AROPYT_TEST_PORT: String(port), AROPYT_TEST_TOKEN: token }, stdio: 'ignore' });
+const child = spawn(binary, [file], { env: { ...process.env, AROPYT_DATA_DIR: path.join(work, 'profile'), AROPYT_TEST_PORT: String(port), AROPYT_TEST_TOKEN: token }, stdio: ['ignore', 'pipe', 'pipe'] });
+let logs = '';
+for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { logs += data; });
 let windowLabel;
 const call = async payload => {
   const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify({ window: windowLabel, ...payload }), signal: AbortSignal.timeout(30000) });
@@ -29,6 +31,9 @@ const passed = [], pass = text => { passed.push(text); console.log('PASS ' + tex
 try {
   await wait(() => call({ code: 'Boolean(window.__aropyt)' }));
   windowLabel = (await call({ op: 'windows' })).find(label => label.startsWith('editor-'));
+  // check() also initializes the plugin's TLS provider before a restored test
+  // fixture is allowed to download. A manifest may not be published yet.
+  if (mode === '--install') await invoke('update.check').catch(() => {});
   const latest = await updaterManifest(path.dirname(installer), version);
   const [major, minor, patch] = version.split('.').map(Number);
   const newer = { ...latest, version: `${major}.${minor}.${patch + 1}` };
@@ -66,5 +71,6 @@ try {
   }
   await writeFile('release/verification/windows-x64/updater-results.json', JSON.stringify({ version, date: new Date().toISOString(), passed }, null, 2));
 } finally {
+  await writeFile('release/verification/windows-x64/updater-app.log', logs);
   await call({ op: 'quit' }).catch(() => {}); if (child.exitCode === null) child.kill();
 }
