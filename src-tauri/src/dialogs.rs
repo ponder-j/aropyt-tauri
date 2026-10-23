@@ -2,9 +2,7 @@ use crate::i18n::text as tr;
 use serde_json::{json, Value};
 use std::path::Path;
 use tauri::{AppHandle, WebviewWindow};
-use tauri_plugin_dialog::{
-    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
+use tauri_plugin_dialog::DialogExt;
 fn file_dialog(
     app: &AppHandle,
     win: &WebviewWindow,
@@ -73,55 +71,8 @@ pub fn save(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
         .map(|p| p.to_string());
     json!({"canceled":p.is_none(),"filePath":p})
 }
-pub fn message(app: &AppHandle, win: &WebviewWindow, opts: &Value) -> Value {
-    let mut labels: Vec<String> = opts["buttons"]
-        .as_array()
-        .map(|v| {
-            v.iter()
-                .filter_map(|s| s.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_else(|| vec![tr("确定", "OK").into()]);
-    if labels.is_empty() { labels.push(tr("确定", "OK").into()); }
-    let buttons = match labels.as_slice() {
-        [a] => MessageDialogButtons::OkCustom(a.clone()),
-        [a, b] => MessageDialogButtons::OkCancelCustom(a.clone(), b.clone()),
-        [a, b, c, ..] => MessageDialogButtons::YesNoCancelCustom(a.clone(), b.clone(), c.clone()),
-        _ => MessageDialogButtons::Ok,
-    };
-    let text = format!(
-        "{}{}{}",
-        opts["message"].as_str().unwrap_or(""),
-        if opts["detail"].is_string() {
-            "\n\n"
-        } else {
-            ""
-        },
-        opts["detail"].as_str().unwrap_or("")
-    );
-    let result = app
-        .dialog()
-        .message(text)
-        .parent(win)
-        .title(opts["title"].as_str().unwrap_or("Aropyt"))
-        .kind(match opts["type"].as_str() {
-            Some("error") => MessageDialogKind::Error,
-            Some("warning") => MessageDialogKind::Warning,
-            _ => MessageDialogKind::Info,
-        })
-        .buttons(buttons)
-        .blocking_show_with_result();
-    let response = match result {
-        MessageDialogResult::Custom(s) => labels
-            .iter()
-            .position(|l| l == &s)
-            .unwrap_or(opts["cancelId"].as_u64().unwrap_or(0) as usize),
-        MessageDialogResult::Ok | MessageDialogResult::Yes => 0,
-        MessageDialogResult::No => 1,
-        MessageDialogResult::Cancel => opts["cancelId"]
-            .as_u64()
-            .map(|v| v as usize)
-            .unwrap_or(labels.len().saturating_sub(1)),
-    };
-    json!({"response":response,"checkboxChecked":false})
+/** Message prompts are rendered by the calling WebView, including requests
+ * originating in the native About and License commands. */
+pub fn message(opts: &Value) -> Value {
+    json!({"__aropytMessageBox": opts})
 }

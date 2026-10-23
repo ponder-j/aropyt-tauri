@@ -1,3 +1,5 @@
+@import url("dialogs.css");
+
 /* Layout glue for the settings window, on top of the vendored Photon sheet. */
 
 html, body {

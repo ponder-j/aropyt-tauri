@@ -61,6 +61,13 @@ try{
   await js(`(0,eval)(${JSON.stringify(layout.outputFiles[0].text)})`);
   for(const check of await js('window.runLayoutChecks()'))pass(check);
  }
+ if(!flags.has('--spelling')&&!flags.has('--export')){
+  const dialogs=await build({entryPoints:['tests/dialogs.ts'],bundle:true,write:false,platform:'browser'});
+  await js(`(0,eval)(${JSON.stringify(dialogs.outputFiles[0].text)})`);
+  await js(`window.runDialogChecks().then(checks=>window.__dialogChecks={checks},error=>window.__dialogChecks={error:String(error)+'\\n'+String(error.stack||'')});true`);
+  const result=await wait(()=>js('window.__dialogChecks||null'));
+  if(result.error)throw Error(result.error);for(const check of result.checks)pass(check);
+ }
  // Native filesystem/encoding/draft checks use the production dispatcher.
  const file=path.join(work,'saved.md');await invoke('fs.writeText',file,'中文\nHello\n','utf16le');assert.equal((await invoke('fs.readText',file,'utf16le')).content,'中文\nHello\n');
  await invoke('setting.put','trimTrailingWhitespace',true);await invoke('setting.put','insertFinalNewLineOnSave',true);await invoke('setting.put','lineEndings','crlf');await invoke('fs.writeText',file,'test  \n行','utf-8');assert.equal((await readFile(file)).toString(),'test\r\n行\r\n');

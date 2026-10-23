@@ -329,12 +329,9 @@ pub fn dispatch(
             ok()
         }
         "window.about" => {
-            dialogs::message(
-                app,
-                win,
-                &json!({"message":"Aropyt 1.0.0","detail":tr("基于 Tauri 2 的 Markdown 编辑器\nMIT 许可证", "A Markdown editor built with Tauri 2\nMIT License")}),
-            );
-            ok()
+            Ok(dialogs::message(
+                &json!({"title":tr("关于 Aropyt", "About Aropyt"),"message":format!("Aropyt {}", app.package_info().version),"detail":tr("基于 Tauri 2 的 Markdown 编辑器\nMIT 许可证", "A Markdown editor built with Tauri 2\nMIT License")}),
+            ))
         }
         "window.openPreferences" => {
             preferences(app, args.first().and_then(Value::as_str))?;
@@ -416,7 +413,7 @@ pub fn dispatch(
                 .map_err(err)?;
             ok()
         }
-        "dialog.showMessageBox" => Ok(dialogs::message(app, win, &v(0))),
+        "dialog.showMessageBox" => Ok(dialogs::message(&v(0))),
         "dialog.showOpenDialog" => Ok(dialogs::open(app, win, &v(0))),
         "dialog.showSaveDialog" => Ok(dialogs::save(app, win, &v(0))),
         "document.getContent" => {
@@ -920,11 +917,9 @@ pub fn dispatch(
                     .open_url("https://github.com/ponder-j/aropyt-tauri", None::<&str>)
                     .map_err(err)?;
             } else if text(0) == "license" {
-                dialogs::message(
-                    app,
-                    win,
-                    &json!({"message":tr("Aropyt 许可证", "Aropyt License"),"detail":tr("项目包声明为 MIT。Aropyt 没有商业激活服务，第三方组件保留原始授权。", "This project is licensed under MIT. Aropyt has no commercial activation service. Third-party components retain their original licenses.")}),
-                );
+                return Ok(dialogs::message(
+                    &json!({"title":tr("Aropyt 许可证", "Aropyt License"),"detail":tr("项目包声明为 MIT。Aropyt 没有商业激活服务，第三方组件保留原始授权。", "This project is licensed under MIT. Aropyt has no commercial activation service. Third-party components retain their original licenses.")}),
+                ));
             } else {
                 let file = match text(0) {
                     "privacy" => tr("docs/privacy.md", "docs/privacy.en.md"),

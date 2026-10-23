@@ -610,14 +610,21 @@ async function saveFile(saveAs = false): Promise<boolean> {
   return true;
 }
 
-async function confirmSave(switchingFile = false): Promise<boolean> {
-  if (!state.dirty) return true;
+let saveConfirmation: Promise<boolean> | undefined;
+function confirmSave(switchingFile = false): Promise<boolean> {
+  if (saveConfirmation) return saveConfirmation;
+  if (!state.dirty) return Promise.resolve(true);
   if (switchingFile && settings.saveWithoutAsking && state.file) return saveFile();
-  const result = await invoke<{ response: number }>('dialog.showMessageBox', {
-    type: 'warning', message: uiText('是否保存当前文档的更改？', 'Save changes to the current document?'), buttons: [uiText('保存', 'Save'), uiText('不保存', 'Don’t Save'), uiText('取消', 'Cancel')], defaultId: 0, cancelId: 2,
-  });
-  if (result.response === 1) { await clearDraft(); return true; }
-  return result.response === 0 ? saveFile() : false;
+  saveConfirmation = (async () => {
+    const result = await invoke<{ response: number }>('dialog.showMessageBox', {
+      type: 'warning', title: uiText('保存', 'Save'), message: uiText('是否保存更改？', 'Save changes?'),
+      detail: uiText('如果不保存，您的更改将会丢失。', 'Your changes will be lost if you don’t save them.'),
+      buttons: [uiText('保存', 'Save'), uiText('丢弃', 'Discard'), uiText('取消', 'Cancel')], defaultId: 0, cancelId: 2,
+    });
+    if (result.response === 1) { await clearDraft(); return true; }
+    return result.response === 0 ? saveFile() : false;
+  })().finally(() => { saveConfirmation = undefined; });
+  return saveConfirmation;
 }
 
 async function newDocument(): Promise<void> {
@@ -1311,7 +1318,7 @@ function comboOf(e: KeyboardEvent): string {
 
 function installKeymap(): void {
   window.addEventListener('keydown', (e) => {
-    if (e.defaultPrevented) return;
+    if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
     const combo = comboOf(e);
     const field = (e.target as HTMLElement)?.closest('input, textarea, select');
     if (field) {
@@ -1453,7 +1460,10 @@ async function boot(): Promise<void> {
   document.body.style.zoom = String(state.zoom);
 
   receiveEvent = (event) => {
-    if (event.type === 'menu') { editor.syncNativeSelection(); void runAction(event.arg.action, event.arg.arg); }
+    if (event.type === 'menu') {
+      if (document.querySelector('dialog[open]')) return;
+      editor.syncNativeSelection(); void runAction(event.arg.action, event.arg.arg);
+    }
     else if (event.type === 'update-progress') updates.progress(event.arg.received, event.arg.total);
     else if (event.type === 'open-file') void openFile(event.arg);
     else if (event.type === 'reapply-theme') void reapplyThemeFromSettings();
@@ -1466,6 +1476,7 @@ async function boot(): Promise<void> {
     }
     else if (event.type === 'window-state') document.body.classList.toggle('maximized', event.arg === 'maximized');
     else if (event.type === 'request-close') {
+      if (saveConfirmation) return;
       void confirmSave().then(async (close) => { if (close) await invoke('app.onCloseWin'); });
     }
   };

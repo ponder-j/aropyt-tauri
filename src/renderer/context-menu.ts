@@ -162,7 +162,12 @@ export class EditorContextMenu {
           { key: 'image:markdown', label: 'Markdown ![alt](src)', checked: image.kind === 'markdown', run: this.command('image:markdown') },
           { key: 'image:html', label: 'HTML <img src="src" alt="alt" />', checked: image.kind === 'html', run: this.command('image:html') }] },
         { key: local ? 'delete-img-file' : 'delete-img', label: text(local ? '删除图片文件' : '删除图片', local ? 'Delete Image File' : 'Delete Image'),
-          run: async () => { if (local && !await this.invoke('images.trash', src)) return;
+          run: async () => { if (local) {
+              const answer = await this.invoke('dialog.showMessageBox', { type: 'warning', title: text('删除图片', 'Delete Image'),
+                message: text('将图片文件移到废纸篓？', 'Move the image file to Trash?'), detail: src,
+                buttons: [text('移到废纸篓', 'Move to Trash'), text('取消', 'Cancel')], defaultId: 1, cancelId: 1 });
+              if (answer.response !== 0 || !await this.invoke('images.trash', src)) return;
+            }
             this.replaceImage(imageRange, '', true); } }, sep(),
       ]);
       clip.forEach(item => item.disabled = true);

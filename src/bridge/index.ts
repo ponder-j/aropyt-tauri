@@ -7,11 +7,17 @@ import { MenuItemConstructorOptions, serializeMenu, setMenuSettings, platform } 
 import { localFileUrl, filePath } from './files';
 import { Spelling, installUnderlines } from './spelling';
 import { WindowsMenu } from './windows-menu';
+import { messageDialog, type MessageBoxOptions } from '../renderer/dialogs';
 const callbacks=new Set<(event:any)=>void>();
 const pending:any[]=[];
 function publish(event:any):void{if(!callbacks.size){pending.push(event);return;}for(const cb of callbacks)cb(event);}
 const raw=async(method:string,...args:any[]):Promise<any>=>{
-  try{return await nativeInvoke('bridge',{method,args});}catch(error){throw new Error(String(error));}
+  if(method==='dialog.showMessageBox')return messageDialog(args[0] ?? {});
+  try{
+    const result=await nativeInvoke<any>('bridge',{method,args});
+    if(result?.__aropytMessageBox)return messageDialog(result.__aropytMessageBox as MessageBoxOptions);
+    return result;
+  }catch(error){throw new Error(String(error));}
 };
 const spelling=new Spelling(raw,publish);
 let menuLines:string[]=[];

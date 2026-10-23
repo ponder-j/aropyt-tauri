@@ -1,3 +1,5 @@
+@import url("dialogs.css");
+
 /* ============================================================================
    Aropyt chrome + live-preview editor glue.
    Aropyt's own window.css / base-control.css supply the control styling; this
@@ -637,16 +639,6 @@ html.theme-dark .cm-code-line .hljs-string { color: #c3e88d; }
 html.theme-dark .cm-code-line .hljs-number,
 html.theme-dark .cm-code-line .hljs-literal { color: #f78c6c; }
 
-.aropyt-dialog { width: min(500px, calc(100vw - 40px)); max-height: 85vh; overflow: auto; padding: 24px; border: 1px solid var(--chrome-border); border-radius: 9px; background: var(--bg-color, white); color: var(--text-color, #333); box-shadow: 0 12px 42px #0002; font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
-.aropyt-dialog::backdrop { background: #0003; }
-.aropyt-dialog h2 { margin: 0 0 20px; font-size: 18px; border: 0; }
-.aropyt-dialog label { display: flex; flex-direction: column; gap: 6px; margin: 14px 0; }
-.aropyt-dialog input, .aropyt-dialog select, .aropyt-dialog textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--chrome-border); border-radius: 4px; background: var(--bg-color, white); color: inherit; font: inherit; box-sizing: border-box; }
-.aropyt-dialog textarea { min-height: 90px; }
-.aropyt-dialog button { padding: 6px 18px; border: 1px solid var(--chrome-border); border-radius: 5px; background: var(--chrome-bg, #fafafa); color: inherit; font: inherit; cursor: pointer; }
-.aropyt-dialog button.primary { background: var(--accent, #3478f6); color: white; border-color: transparent; }
-.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
-.dialog-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 22px; }
 .no-code-wrap .cm-line.cm-code-line { white-space: pre; overflow-wrap: normal; }
 .indent-first-line .md-block-widget p, .indent-first-line .cm-paragraph-first { text-indent: 2em; }
 .collapse-paragraph-whitespace .md-block-widget p { white-space: normal; }

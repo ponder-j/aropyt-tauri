@@ -2,7 +2,7 @@ import { uiText } from '../shared/ui-language';
 import { selectedLines } from './selected-lines';
 import { displayFileUrl } from '../bridge/files';
 import {
-  EditorSelection, EditorState, StateEffect, StateField,
+  Compartment, EditorSelection, EditorState, StateEffect, StateField, Transaction,
 } from '@codemirror/state';
 import {
   Decoration, DecorationSet, EditorView, ViewUpdate, WidgetType, drawSelection,
@@ -339,17 +339,43 @@ const QUOTE_RE = /^\s{0,3}>\s?/;
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])\s/;
 const TASK_RE = /^(\s*)([-*+])\s+\[[ xX]\]\s/;
 
+function headingPrefix(text: string) {
+  return (dialect().strictMode ? /^ {0,3}(#{1,6})(?:[ \t]+|$)/ : /^ {0,3}(#{1,6})[ \t]*/).exec(text.replace(/＃/g, '#'));
+}
+
 function headingAt(state: EditorState, number: number) {
   const line = state.doc.line(number);
-  const prefix = (dialect().strictMode ? /^ {0,3}(#{1,6})(?:[ \t]+|$)/ : /^ {0,3}(#{1,6})[ \t]*/).exec(line.text.replace(/＃/g, '#'));
+  const prefix = headingPrefix(line.text);
   if (prefix) return { line, level: prefix[1].length, bodyFrom: line.from + prefix[0].length, underline: null };
   const underline = number < state.doc.lines ? state.doc.line(number + 1) : null;
   return line.text.trim() && underline && /^ {0,3}(?:=+|-+)[ \t]*$/.test(underline.text) ?
     { line, level: underline.text.trim()[0] === '=' ? 1 : 2, bodyFrom: line.from, underline } : null;
 }
 
+const commitHeading = StateEffect.define<void>();
+/** A newly typed ATX heading stays ordinary editable text until the caret leaves
+ * its line. Loaded headings and headings already committed never reopen. */
+const draftHeadingField = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    if (tr.state.field(modeField).source || tr.state.field(preferenceField).liveRenderSource ||
+        tr.effects.some(effect => effect.is(commitHeading)) ||
+        tr.docChanged && !tr.isUserEvent('input') && !tr.isUserEvent('delete')) return null;
+    const selection = tr.newSelection.main, line = tr.newDoc.lineAt(selection.head);
+    if (selection.from < line.from || selection.to > line.to) return null;
+    if (value !== null && tr.changes.mapPos(value, -1) === line.from) return line.from;
+    if (!tr.docChanged || !(tr.isUserEvent('input') || tr.isUserEvent('delete')) || !headingPrefix(line.text) ||
+        tr.isUserEvent('input.paste') || tr.isUserEvent('input.drop')) return null;
+    const previous = tr.startState.doc.lineAt(tr.changes.invertedDesc.mapPos(line.from, -1));
+    if (headingPrefix(previous.text)) return null;
+    const block = renderDocumentBlocks(tr.newDoc.toString()).find(block => block.startLine === line.number - 1 && block.kind === 'heading_open');
+    return block ? line.from : null;
+  },
+});
+
 function currentHeading(state: EditorState) {
   const line = state.doc.lineAt(state.selection.main.head);
+  if (state.field(draftHeadingField) === line.from) return null;
   const block = renderDocumentBlocks(state.doc.toString()).find((b) => b.kind === 'heading_open' && b.startLine < line.number && b.endLine >= line.number);
   return block ? headingAt(state, block.startLine + 1) : null;
 }
@@ -380,6 +406,7 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
   const offsets = lineStartOffsets(state);
   const [firstActive, lastActive] = activeLineRange(state);
   const blocks: BlockRange[] = renderDocumentBlocks(text);
+  const draftHeading = state.field(draftHeadingField);
   const references = documentReferences(text);
   const codeLines = new Set<number>();
   const headingLines = new Set<number>();
@@ -461,6 +488,15 @@ function buildDecorations(state: EditorState, host: EditorHost | null): Decorati
     }
 
     const heading = b.kind === 'heading_open' && headingAt(state, startLine);
+    if (heading && draftHeading === heading.line.from) {
+      headingLines.add(startLine);
+      items.push({ from: heading.line.from, to: heading.line.from, deco: Decoration.line({ class: 'cm-paragraph-first cm-paragraph-last' + afterClass }) });
+      if (/[ \t]/.test(heading.line.text.slice(0, heading.bodyFrom - heading.line.from))) items.push({
+        from: heading.line.from, to: heading.bodyFrom, deco: Decoration.mark({ class: 'cm-md-marker' }),
+      });
+      inline(heading.bodyFrom, heading.line.text.slice(heading.bodyFrom - heading.line.from));
+      continue;
+    }
     if (heading && !(active && state.field(preferenceField).liveRenderSource)) {
       headingLines.add(startLine);
       items.push({ from: heading.line.from, to: heading.line.from, deco: Decoration.line({
@@ -1026,6 +1062,7 @@ export class DocEditor {
   readonly view: EditorView;
   private host: EditorHost;
   private source = false;
+  private history = new Compartment();
   private imageContext: ImageSourceRange | null = null;
   private headingStyle = document.createElement('style');
   private disposeWindowFocus = () => {};
@@ -1036,7 +1073,7 @@ export class DocEditor {
       doc: opts.doc,
       selection: { anchor: /^ {0,3}#{1,6}(?:[ \t]+|$)/.exec(opts.doc.split('\n')[0])?.[0].length ?? 0 },
       extensions: [
-        history(),
+        this.history.of(history()),
         drawSelection(),
         rectangularSelection(),
         EditorView.lineWrapping,
@@ -1049,6 +1086,7 @@ export class DocEditor {
         }),
         preferenceField.init(() => ({ ...opts.preferences })),
         modeField,
+        draftHeadingField,
         fenceSelection,
         searchHighlightField,
         decorationField,
@@ -1060,6 +1098,9 @@ export class DocEditor {
         }),
         EditorView.domEventHandlers({
           mousedown: (event, view) => this.handleWidgetClick(event, view),
+          blur: (_event, view) => {
+            if (view.state.field(draftHeadingField) !== null) view.dispatch({ effects: commitHeading.of() });
+          },
           copy: (event) => this.copy(event, false),
           cut: (event) => this.copy(event, true),
         }),
@@ -1262,6 +1303,21 @@ export class DocEditor {
 
   get value(): string {
     return this.view.state.doc.toString();
+  }
+
+  /** Replace the active document without retaining the previous file's undo/redo. */
+  loadDocument(text: string): void {
+    this.imageContext = null;
+    // Removing the history field discards both branches while leaving modes,
+    // preferences and all other editor extensions in place.
+    this.view.dispatch({ effects: this.history.reconfigure([]) });
+    this.view.dispatch({
+      changes: { from: 0, to: this.view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+      effects: this.history.reconfigure(history()),
+      annotations: Transaction.addToHistory.of(false),
+      scrollIntoView: true,
+    });
   }
 
   setValue(text: string, keepCursor = false): void {

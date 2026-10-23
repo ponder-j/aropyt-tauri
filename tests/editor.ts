@@ -362,6 +362,43 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(blank.length >= 1, 'Intentional empty paragraphs were hidden like separating blank lines');
     editor.setValue('First\n\n'); cursor(editor.value.length); key('Backspace'); assert(editor.value === 'First', 'Backspace from a new empty paragraph failed to merge it');
   });
+  await test('Loading a document clears the previous file undo and redo while new edits remain reversible', () => {
+    editor.loadDocument('Document A'); cursor(editor.value.length);
+    insert(' first'); insert(' second');
+    assert(undo(view) && editor.value === 'Document A first', 'Document A edit did not undo');
+    assert(redo(view) && editor.value === 'Document A first second', 'Document A edit did not redo');
+    assert(undo(view) && editor.value === 'Document A first', 'Could not prepare both history branches before switching');
+    editor.loadDocument('Document B');
+    assert(view.state.selection.main.empty && view.state.selection.main.head === 0, 'Loaded document did not start at the beginning');
+    assert(!undo(view) && !redo(view) && editor.value === 'Document B', 'Previous document history leaked into the loaded file');
+    cursor(editor.value.length); insert(' edited');
+    assert(undo(view) && editor.value === 'Document B', 'New document input did not undo in one step');
+    assert(!undo(view) && editor.value === 'Document B', 'Undo crossed the loaded document boundary');
+    assert(redo(view) && editor.value === 'Document B edited', 'New document input did not redo in one step');
+    assert(!redo(view), 'Previous document redo survived the document switch');
+    editor.loadDocument('');
+    assert(!undo(view) && !redo(view) && editor.value === '', 'Loading a new empty document retained history');
+    insert('New document');
+    assert(undo(view) && editor.value === '', 'First edit in a new empty document did not undo');
+    assert(redo(view) && editor.value === 'New document', 'First edit in a new empty document did not redo');
+  });
+  await test('Loading preserves editor modes and preferences while setValue remains an undoable edit', () => {
+    editor.configure({ indentSize: '3', codeIndentSize: 2, fenceAutoWrap: false, spellCheck: false });
+    editor.setSourceMode(true); editor.setFocusMode(true); editor.setTypewriterMode(true);
+    try {
+      editor.loadDocument('Source document');
+      assert(editor.isSourceMode && ['mode-source', 'mode-focus', 'mode-typewriter', 'no-code-wrap'].every((name) => view.dom.classList.contains(name)), 'Loading changed editor modes or code wrapping preference');
+      assert(view.contentDOM.getAttribute('spellcheck') === 'false' && view.dom.style.getPropertyValue('--code-tab-size') === '2', 'Loading discarded editor preferences');
+      key('Tab');
+      assert(editor.value === '   Source document', 'Loading discarded the configured prose Tab size');
+      assert(undo(view) && editor.value === 'Source document', 'Preserved preferences broke new document undo');
+      editor.setValue('Replacement');
+      assert(undo(view) && editor.value === 'Source document', 'setValue no longer behaves as an undoable edit');
+      assert(redo(view) && editor.value === 'Replacement', 'setValue replacement no longer redoes');
+    } finally {
+      editor.setSourceMode(false); editor.setFocusMode(false); editor.setTypewriterMode(false);
+    }
+  });
   await test('Selecting across paragraphs does not reveal the hidden separator rows', async () => {
     editor.setValue('# Heading\n\nFirst paragraph.\n\nSecond paragraph.\n\nLast paragraph.'); cursor(editor.value.length); await frame();
     const positions = () => Array.from(parent.querySelectorAll<HTMLElement>('.cm-heading,.cm-paragraph-first')).map((node) => node.getBoundingClientRect().top);
@@ -608,6 +645,81 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     assert(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'int value = 1;', 'Menu Select All did not select the code body');
     editor.selectAll();
     assert(view.state.selection.main.from === 0 && view.state.selection.main.to === editor.value.length, 'Repeated Select All did not select the document');
+  });
+  await test('New ATX headings keep their source and paragraph size until the caret leaves, then stay rendered', async () => {
+    for (let level = 1; level <= 6; level++) {
+      editor.setValue('\n\nAfter'); cursor(0);
+      const fontSize = getComputedStyle(view.contentDOM).fontSize;
+      for (let n = 0; n < level; n++) insert('#');
+      await frame();
+      assert(!parent.querySelector('.cm-heading') && view.contentDOM.innerText.includes('#'.repeat(level)), 'Typing hashes immediately rendered a heading');
+      insert(' '); insert('Title'); await frame();
+      const draft = view.contentDOM.querySelector<HTMLElement>('.cm-line')!;
+      assert(draft.textContent === '#'.repeat(level) + ' Title' && getComputedStyle(draft).fontSize === fontSize, 'Draft heading hid its prefix or used heading size');
+      assert(draft.querySelector('.cm-md-marker')?.textContent === '#'.repeat(level) + ' ', 'Draft heading prefix did not become a muted marker');
+      cursor(level); key('ArrowLeft');
+      assert(view.state.selection.main.head === level - 1, 'Draft heading prefix trapped the caret');
+      cursor(editor.value.indexOf('Title') + 2); insert('x'); await frame();
+      assert(!parent.querySelector('.cm-heading'), 'Editing within the draft committed the heading');
+      cursor(editor.value.length); await frame();
+      assert(parent.querySelector('.cm-header-' + level)?.textContent === 'Tixtle', 'Leaving the draft did not render its heading');
+      cursor(0); await frame();
+      assert(view.state.selection.main.head === level + 1 && !view.contentDOM.innerText.includes('#'), 'Returning to a committed heading reopened its prefix');
+    }
+  });
+  await test('Draft heading Backspace edits visible markers and Enter commits the title', async () => {
+    editor.setValue(''); cursor(0); insert('##'); insert(' '); insert('Title');
+    cursor(3); key('Backspace');
+    assert(editor.value === '##Title', 'Draft Backspace removed the whole heading prefix');
+    cursor(2); insert(' '); cursor(2); key('Backspace');
+    assert(editor.value === '# Title', 'Draft Backspace could not change the heading level');
+    cursor(2); key('Backspace'); insert(' '); await frame();
+    assert(!parent.querySelector('.cm-heading') && view.contentDOM.innerText.includes('# Title'), 'Repairing the draft heading space committed it');
+    cursor(editor.value.length); key('Enter'); insert('Body'); await frame();
+    assert(editor.value === '# Title\n\nBody' && parent.querySelector('.cm-header-1')?.textContent === 'Title', 'Enter did not commit the draft and create a paragraph');
+    cursor(2); await frame();
+    assert(!view.contentDOM.innerText.includes('#'), 'Enter-committed heading reopened on return');
+    editor.setValue(''); cursor(0); insert('#######'); key('Backspace'); insert(' Title'); await frame();
+    assert(!parent.querySelector('.cm-heading') && view.contentDOM.innerText.includes('###### Title'), 'Deleting a seventh hash prematurely rendered the draft');
+    cursor(0); key('Enter'); await frame();
+    assert(parent.querySelector('.cm-header-6')?.textContent === 'Title', 'Leaving the draft from its start did not commit it');
+  });
+  await test('Leaving a draft heading through editor blur or a cross-line selection commits it', async () => {
+    editor.setValue(''); cursor(0); insert('#'); insert(' Title');
+    view.contentDOM.blur(); await frame();
+    assert(parent.querySelector('.cm-header-1')?.textContent === 'Title', 'Blurring the editor did not commit a single-line draft');
+    view.focus(); await frame();
+    assert(!view.contentDOM.innerText.includes('#'), 'Refocusing reopened the committed heading');
+    editor.setValue('\n\nAfter'); cursor(0); insert('## Title');
+    view.dispatch({ selection: { anchor: 3, head: editor.value.length } }); await frame();
+    assert(parent.querySelector('.cm-header-2')?.textContent === 'Title', 'Selecting into another line left the draft uncommitted');
+    cursor(3); await frame();
+    assert(!view.contentDOM.innerText.includes('##'), 'Returning after a cross-line selection reopened the prefix');
+  });
+  await test('Document replacement, paste and source modes do not inherit draft heading state', async () => {
+    editor.setValue(''); cursor(0); insert('# Draft');
+    editor.setValue('## Loaded'); await frame();
+    assert(parent.querySelector('.cm-header-2')?.textContent === 'Loaded', 'Document replacement inherited draft state at the same offset');
+    editor.setValue(''); cursor(0);
+    view.dispatch({ changes: { from: 0, insert: '# Pasted' }, selection: { anchor: 8 }, userEvent: 'input.paste' }); await frame();
+    assert(parent.querySelector('.cm-header-1')?.textContent === 'Pasted', 'Pasted Markdown became an unfinished typed heading');
+    editor.setValue(''); cursor(0); insert('# Draft'); editor.setSourceMode(true); await frame();
+    assert(view.contentDOM.innerText.includes('# Draft'), 'Source mode lost the heading source');
+    editor.setSourceMode(false); await frame();
+    assert(parent.querySelector('.cm-header-1')?.textContent === 'Draft', 'Source mode round trip retained a stale draft');
+    editor.setValue(''); cursor(0); insert('# Draft'); editor.loadDocument('# Loaded'); await frame();
+    assert(parent.querySelector('.cm-header-1')?.textContent === 'Loaded', 'Loading a file inherited draft state');
+  });
+  await test('Draft heading recognition follows the Markdown dialect and leaves code as code', async () => {
+    for (const strictMode of [true, false]) {
+      setDialect({ strictMode });
+      editor.setValue('\n\nAfter'); cursor(0); insert('#'); insert('Title'); await frame();
+      assert(!parent.querySelector('.cm-heading') && view.contentDOM.innerText.includes('#Title'), 'Unfinished heading rendered while typing');
+      cursor(editor.value.length); await frame();
+      assert(!!parent.querySelector('.cm-header-1') === !strictMode, 'Committing the draft ignored strict heading syntax');
+    }
+    editor.setValue('```text\n\n```'); cursor(8); insert('# Code'); await frame();
+    assert(!parent.querySelector('.cm-heading') && parent.querySelector('.cm-code-line')?.textContent === '# Code', 'Heading draft handling escaped its code fence');
   });
   await test('Hiding a separator does not swallow active heading styling', async () => {
     editor.setValue('Before\n\n## Heading\n\nAfter');
