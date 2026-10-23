@@ -1282,7 +1282,7 @@ export class DocEditor {
   syncNativeSelection(): void {
     const selection = window.getSelection();
     if (!selection?.anchorNode || !selection.focusNode || !this.view.contentDOM.contains(selection.anchorNode) || !this.view.contentDOM.contains(selection.focusNode)) return;
-    const inWidget = (node: Node) => (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)?.closest('.md-block-widget, [contenteditable="false"]');
+    const inWidget = (node: Node) => (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)?.closest('.md-block-widget, .md-table-widget, [contenteditable="false"]');
     if (inWidget(selection.anchorNode) || inWidget(selection.focusNode)) return;
     const anchor = this.view.posAtDOM(selection.anchorNode, selection.anchorOffset), head = this.view.posAtDOM(selection.focusNode, selection.focusOffset);
     const current = this.view.state.selection.main;

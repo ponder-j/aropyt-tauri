@@ -9,7 +9,7 @@ node tools/test-platform.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node tools/wordcount-test.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-npm run package:win -- --ci -- --locked
+node tools/tauri.mjs build --bundles nsis --ci -- --locked
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*_x64-setup.exe)

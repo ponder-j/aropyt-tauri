@@ -1,6 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile, rm, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
@@ -24,8 +24,10 @@ const output = path.join('release/verification', label);
 await mkdir(output, { recursive: true });
 await rm('release/verification/test-results.json', { force: true });
 const log = createWriteStream(path.join(output, 'tests.log'));
+// Tauri rejects macOS executable paths containing symlinked directories such as /tmp.
+const resolvedBinary = await realpath(binary);
 const child = spawn(process.execPath, ['tools/test-tauri.mjs', '--packaged'], {
-  env: { ...process.env, AROPYT_TEST_BINARY: path.resolve(binary) },
+  env: { ...process.env, AROPYT_TEST_BINARY: resolvedBinary },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 for (const stream of [child.stdout, child.stderr]) {
@@ -45,6 +47,6 @@ await writeFile(path.join(output, 'metadata.json'), JSON.stringify({
   commit: process.env.GITHUB_SHA || execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   artifact: path.basename(artifact),
   sha256: createHash('sha256').update(await readFile(artifact)).digest('hex'),
-  binary: path.resolve(binary),
+  binary: resolvedBinary,
   exitCode: code,
 }, null, 2) + '\n');
