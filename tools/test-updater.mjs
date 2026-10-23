@@ -18,8 +18,9 @@ const port = server.address().port; await new Promise(resolve => server.close(re
 const token = randomBytes(32).toString('hex');
 const expectedHash = createHash('sha256').update(await readFile(binary)).digest('hex');
 const child = spawn(binary, [file], { env: { ...process.env, AROPYT_DATA_DIR: path.join(work, 'profile'), AROPYT_TEST_PORT: String(port), AROPYT_TEST_TOKEN: token }, stdio: 'ignore' });
+let windowLabel;
 const call = async payload => {
-  const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30000) });
+  const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: JSON.stringify({ window: windowLabel, ...payload }), signal: AbortSignal.timeout(30000) });
   const result = await response.json(); if (!result.ok) throw Error(result.error); return result.value;
 };
 const invoke = (method, ...args) => call({ op: 'invoke', method, args });
@@ -27,6 +28,7 @@ const wait = async fn => { const end = Date.now() + 90000; let last; while (Date
 const passed = [], pass = text => { passed.push(text); console.log('PASS ' + text); };
 try {
   await wait(() => call({ code: 'Boolean(window.__aropyt)' }));
+  windowLabel = (await call({ op: 'windows' })).find(label => label.startsWith('editor-'));
   const latest = await updaterManifest(path.dirname(installer), version);
   const [major, minor, patch] = version.split('.').map(Number);
   const newer = { ...latest, version: `${major}.${minor}.${patch + 1}` };
@@ -56,6 +58,7 @@ try {
     let timeout;
     try { await Promise.race([exited, new Promise((_, reject) => { timeout = setTimeout(() => reject(Error('Installer did not close the running app')), 60000); })]); }
     finally { clearTimeout(timeout); }
+    windowLabel = undefined;
     await wait(() => call({ code: 'Boolean(window.__aropyt)' }));
     assert.equal(createHash('sha256').update(await readFile(binary)).digest('hex'), expectedHash);
     assert.equal(await call({ code: 'window.__aropyt.state.file' }), file);

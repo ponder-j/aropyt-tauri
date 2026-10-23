@@ -71,8 +71,8 @@ pub fn dispatch(app: &AppHandle, win: &WebviewWindow, method: &str) -> Result<Va
     }
 }
 
-// Only the authenticated, isolated regression harness can stage a synthetic
-// newer manifest. Signature verification is still the real plugin verifier.
+// Only the authenticated, isolated regression harness can stage an update for
+// a same-version reinstall. Signature verification is the real plugin verifier.
 pub fn test_fixture(app: &AppHandle, win: &WebviewWindow, manifest: Value, file: &str, stage: bool) -> Result<Value> {
     if !crate::testing::isolated() { return Err("Update fixture requires an isolated test profile".into()); }
     let builder = app.updater_builder().installer_args(["/NS".to_string(), format!("/D={}", std::env::current_exe().map_err(err)?.parent().ok_or("Missing executable directory")?.display())]);
