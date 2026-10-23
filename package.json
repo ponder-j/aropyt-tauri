@@ -1,6 +1,6 @@
 {
   "name": "aropyt-tauri",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Aropyt Markdown editor on Tauri 2",
   "author": "Aropyt",
   "license": "MIT",

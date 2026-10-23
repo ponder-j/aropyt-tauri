@@ -6,6 +6,7 @@ import path from 'node:path';
 
 const [label, binary, artifact] = process.argv.slice(2);
 const targets = {
+  'macos-arm64': { platform: 'darwin', arch: 'arm64' },
   'windows-x64': { platform: 'win32', arch: 'x64' },
   'linux-x64-deb': { platform: 'linux', arch: 'x64' },
   'linux-x64-appimage': { platform: 'linux', arch: 'x64' },

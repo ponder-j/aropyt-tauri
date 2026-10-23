@@ -1,6 +1,6 @@
 [package]
 name = "aropyt"
-version = "1.0.0"
+version = "1.0.1"
 description = "Aropyt Markdown editor"
 edition = "2021"
 license = "MIT"
