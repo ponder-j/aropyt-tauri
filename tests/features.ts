@@ -310,7 +310,7 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
   await featureWait(() => !document.getElementById('sidebar-actions-menu')!.hidden);
   const refresh = Array.from(document.querySelectorAll<HTMLButtonElement>('#sidebar-actions-menu button')).find(node => ['刷新', 'Refresh'].includes(node.textContent || ''))!;
   refresh.click();
-  await featureWait(() => Array.from(document.querySelectorAll<HTMLElement>('.file-list-card')).some(node => node.dataset.path?.endsWith('/sidebar-refreshed.md') && node.textContent?.includes('Refresh summary')));
+  await featureWait(() => Array.from(document.querySelectorAll<HTMLElement>('.file-list-card')).some(node => node.dataset.path?.replace(/\\/g, '/').endsWith('/sidebar-refreshed.md') && node.textContent?.includes('Refresh summary')));
   document.getElementById('switch-file-list-btn')!.click();
   await featureWait(() => !!document.querySelector('#file-library-tree .file-tree-node'));
   document.getElementById('switch-file-list-btn')!.click();
@@ -424,7 +424,7 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
     await featureWait(() => !name.disabled);
     featureAssert(document.querySelector('#sidebar-new-file-row [role="alert"]')!.textContent && (await bridge.invoke('fs.readText', fixtureDir + 'sidebar-refreshed.md')).content.includes('Refresh summary'), 'New file overwrote an existing document');
     submitName('sidebar-created');
-    await featureWait(() => api.state.file === fixtureDir + 'sidebar-created.md');
+    await featureWait(() => api.state.file?.replace(/\\/g, '/') === (fixtureDir + 'sidebar-created.md').replace(/\\/g, '/'));
     featureAssert(editor.value === '' && (await bridge.invoke('fs.readText', api.state.file)).content === '', 'Inline new file did not open an empty Markdown file on disk');
     await featureWait(() => !document.getElementById('sidebar-new-file-row'));
     document.getElementById('sidebar-new-file-btn')!.click();
