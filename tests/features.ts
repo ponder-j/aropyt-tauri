@@ -290,6 +290,8 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
   featureAssert(document.querySelector('.file-list-card .file-card-extension')?.textContent === '.md' && Array.from(document.querySelectorAll('.file-card-preview')).some(node => node.textContent?.includes('Nested document')), 'Document list lost extensions or real file summaries');
   document.getElementById('sidebar-menu-btn')!.click();
   await featureWait(() => document.getElementById('sidebar-menu-btn')?.getAttribute('aria-expanded') === 'true');
+  window.dispatchEvent(new Event('resize'));
+  featureAssert(!document.getElementById('sidebar-actions-menu')!.hidden && document.getElementById('sidebar-menu-btn')?.getAttribute('aria-expanded') === 'true', 'Viewport resize closed the open folder menu');
   featureAssert(document.querySelector('#sidebar-actions-menu [data-folder]'), 'Folder menu omitted recent directories');
   document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   featureAssert(document.getElementById('sidebar-actions-menu')!.hidden && document.activeElement?.id === 'sidebar-menu-btn', 'Escape did not close the folder menu and restore its button');

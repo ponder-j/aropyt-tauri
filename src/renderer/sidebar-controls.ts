@@ -43,7 +43,7 @@ export class SidebarControls {
       } else if (event.key === 'Tab') this.dismiss();
     });
     window.addEventListener('blur', () => this.dismiss());
-    window.addEventListener('resize', () => this.dismiss());
+    window.addEventListener('resize', () => this.positionMenu());
     window.addEventListener('aropyt-language-changed', () => {
       this.dismiss();
       this.composer?.querySelector('input')?.setAttribute('aria-label', this.text('文件名', 'File name'));
@@ -114,12 +114,16 @@ export class SidebarControls {
     }
     this.anchor = anchor; anchor.setAttribute('aria-expanded', 'true'); this.sidebar.classList.add('sidebar-menu-open');
     this.menu.hidden = false;
-    const rect = anchor.getBoundingClientRect(), zoom = Number(getComputedStyle(document.body).zoom) || 1;
+    this.positionMenu();
+    this.menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+  }
+  private positionMenu(): void {
+    if (this.menu.hidden || !this.anchor?.isConnected) return;
+    const rect = this.anchor.getBoundingClientRect(), zoom = Number(getComputedStyle(document.body).zoom) || 1;
     const box = this.menu.getBoundingClientRect();
     this.menu.style.left = Math.max(4, Math.min(rect.right - box.width, window.innerWidth - box.width - 4)) / zoom + 'px';
     this.menu.style.bottom = (window.innerHeight - rect.top + 4) / zoom + 'px';
     this.menu.style.maxHeight = Math.max(60, rect.top - 12) / zoom + 'px';
-    this.menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   }
   async newFile(): Promise<void> {
     this.dismiss();
