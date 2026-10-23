@@ -329,7 +329,7 @@ function buildPanes(): Pane[] {
           { kind: 'note', text: 'Applied immediately — no restart needed.' },
         ] },
         { title: 'Registration / Activation', rows: [
-          { kind: 'note', text: 'Aropyt is a local replica and has no activation, licence server or updater.' },
+          { kind: 'note', text: 'Aropyt needs no activation. Windows checks GitHub for updates and installs only with your confirmation.' },
           { kind: 'button', label: '', button: 'About Aropyt',
             action: () => invoke('window.about') },
         ] },

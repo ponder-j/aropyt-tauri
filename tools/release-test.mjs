@@ -82,9 +82,12 @@ test('publication requires all three matching artifacts and evidence from this c
   await writeFile(resultFile, JSON.stringify({ ...result, passed: result.passed.slice(0, 83) }));
   await assert.rejects(assemble(root, commit), /Invalid release evidence/);
   await writeFile(resultFile, JSON.stringify(result));
+  await assert.rejects(assemble(root, commit), /ENOENT/);
+  await assert.rejects(access(path.join(root, 'release/publish')));
+  await writeFile(path.join(root, 'release/download/installer-windows-x64/Aropyt_1.2.3_x64-setup.exe.sig'), Buffer.from('untrusted comment: test signature fixture').toString('base64'));
   await assemble(root, commit);
   const sums = await readFile(path.join(root, 'release/publish/SHA256SUMS.txt'), 'utf8');
-  assert.equal(sums.trim().split('\n').length, 4);
+  assert.equal(sums.trim().split('\n').length, 6);
   for (const line of sums.trim().split('\n')) {
     const [digest, filename] = line.split('  ');
     assert.equal(createHash('sha256').update(await readFile(path.join(root, 'release/publish', filename))).digest('hex'), digest);

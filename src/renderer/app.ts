@@ -16,6 +16,8 @@ import { SpellcheckControl } from './spellcheck-control';
 import { EditorContextMenu } from './context-menu';
 import { SidebarControls, type FileSort } from './sidebar-controls';
 import { SidebarSearch } from './sidebar-search';
+import { shortcutCombo, normalizeShortcut } from '../shared/shortcuts';
+import { UpdateController } from './updater';
 
 declare global {
   interface Window {
@@ -754,6 +756,7 @@ async function exportFile(format: 'html' | 'pdf' | 'png' | 'print', withStyles =
 /* ------------------------------------------------------------- notification */
 
 let notifyTimer: number | undefined;
+const updates = new UpdateController((method, ...args) => invoke(method, ...args), (...args) => notify(...args));
 
 function notify(message: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2600): void {
   const host = $('#md-notification');
@@ -772,6 +775,7 @@ function notify(message: string, kind: 'info' | 'success' | 'error' = 'info', ms
 
 async function runAction(action: string, arg?: unknown): Promise<unknown> {
   try {
+  if (action === 'checkForUpdates') return updates.check(true);
   if (action === 'toggleWordCount') { spellcheck?.dismiss(); statistics?.toggle(); return true; }
   if (action === 'spellCheck') { statistics?.dismiss(); spellcheck?.toggle(); return true; }
   if (editor.handleImageAction(action) || editor.handleTableAction(action)) return true;
@@ -1295,16 +1299,14 @@ const KEY_ACTIONS: [string, string][] = [
   ['Ctrl+Enter', 'insertParagraphAfter'], ['Ctrl+Shift+Enter', 'insertParagraphBefore'],
   ['Ctrl+Shift+d', 'deleteBlock'], ['F8', 'toggleFocus'], ['F9', 'toggleTypewriter'],
   ['Ctrl+Alt+Shift+l', 'deleteLine'],
+  ['Ctrl+Shift+c', 'copyAsMarkdown'], ['Ctrl+Shift+v', 'pasteAsPlain'],
+  ['Ctrl+=', 'headingUp'], ['Ctrl+-', 'headingDown'],
+  ['Ctrl+Shift+[', 'insertOrderedList'], ['Ctrl+Shift+]', 'insertUnorderedList'],
+  ['Alt+Shift+5', 'strike'], ['Ctrl+Shift+t', 'insertTable'],
 ];
 
 function comboOf(e: KeyboardEvent): string {
-  const parts: string[] = [];
-  if (e.ctrlKey || (/Mac/i.test(navigator.platform) && e.metaKey)) parts.push('Ctrl');
-  if (e.altKey) parts.push('Alt');
-  if (e.shiftKey) parts.push('Shift');
-  const key = e.key.length === 1 ? e.key : e.key;
-  parts.push(key);
-  return parts.join('+');
+  return shortcutCombo(e);
 }
 
 function installKeymap(): void {
@@ -1324,8 +1326,8 @@ function installKeymap(): void {
       return;
     }
     const custom = Object.entries(settings.keyBinding || {}).find(([, binding]) =>
-      String(binding).replace(/CommandOrControl|CmdOrCtrl|Command|Cmd|Meta/gi, 'Ctrl').toLowerCase() === combo.toLowerCase());
-    const direct = custom ? [String(custom[1]), custom[0]] : KEY_ACTIONS.find(([k]) => k.toLowerCase() === combo.toLowerCase());
+      normalizeShortcut(String(binding)) === combo.toLowerCase());
+    const direct = custom ? [String(custom[1]), custom[0]] : KEY_ACTIONS.find(([k, action]) => !settings.keyBinding?.[action] && normalizeShortcut(k) === combo.toLowerCase());
     if (direct) {
       e.preventDefault();
       void runAction(direct[1]);
@@ -1342,6 +1344,7 @@ async function boot(): Promise<void> {
   let receiveEvent: ((event: { type: string; arg?: any }) => void) | undefined;
   bridge.on(event => { if (receiveEvent) receiveEvent(event); else startupEvents.push(event); });
   document.body.classList.add('native-window');
+  if (/Win/i.test(navigator.platform)) document.body.classList.add('windows-menu-chrome');
   if (/Mac/i.test(navigator.platform)) {
     document.body.classList.remove('on-windows');
     document.body.classList.add('on-mac');
@@ -1451,6 +1454,7 @@ async function boot(): Promise<void> {
 
   receiveEvent = (event) => {
     if (event.type === 'menu') { editor.syncNativeSelection(); void runAction(event.arg.action, event.arg.arg); }
+    else if (event.type === 'update-progress') updates.progress(event.arg.received, event.arg.total);
     else if (event.type === 'open-file') void openFile(event.arg);
     else if (event.type === 'reapply-theme') void reapplyThemeFromSettings();
     else if (event.type === 'reapply-chrome') applyChromeFromSettings();
@@ -1468,6 +1472,7 @@ async function boot(): Promise<void> {
   for (const event of startupEvents) receiveEvent(event);
 
   (window as any).__aropyt = { renderBlockHtml, footnoteDefinitions, state, runAction, blockRanges, prepareExport, confirmSave, getEditor: () => editor };
+  window.setTimeout(() => void updates.startup().catch(console.info), 3000);
 
   document.body.classList.remove('ty-before-first-render');
   void loadMathJax();

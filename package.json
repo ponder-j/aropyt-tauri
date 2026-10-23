@@ -27,7 +27,8 @@
     "package:win": "node tools/tauri.mjs build --bundles nsis",
     "package:linux": "node tools/tauri.mjs build --bundles deb,appimage",
     "test:packaged": "node tools/test-tauri.mjs --packaged",
-    "dictionaries:prepare": "node tools/prepare-dictionaries.mjs"
+    "dictionaries:prepare": "node tools/prepare-dictionaries.mjs",
+    "test:updates": "node --test tools/updates-test.mjs"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

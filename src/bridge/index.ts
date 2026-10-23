@@ -6,6 +6,7 @@ import { buildMenu, menuLanguage } from './menu';
 import { MenuItemConstructorOptions, serializeMenu, setMenuSettings, platform } from './menu-host';
 import { localFileUrl, filePath } from './files';
 import { Spelling, installUnderlines } from './spelling';
+import { WindowsMenu } from './windows-menu';
 const callbacks=new Set<(event:any)=>void>();
 const pending:any[]=[];
 function publish(event:any):void{if(!callbacks.size){pending.push(event);return;}for(const cb of callbacks)cb(event);}
@@ -19,6 +20,13 @@ let menuGeneration=0;
 let settings:Record<string,any>={};
 let refreshing:Promise<void>|undefined;
 let refreshAgain=false;
+let windowsMenu: WindowsMenu | undefined;
+function dispatchMenu(entry: MenuItemConstructorOptions): void {
+  if(entry.role){void role(entry.role);return;}
+  if(entry.event==='bridge'&&entry.action==='clearRecent'){void invoke('setting.clearRecentDocuments');return;}
+  if(entry.event==='open-file')publish({type:'open-file',arg:entry.arg});
+  else if(entry.event==='menu')publish({type:'menu',arg:{action:entry.action,arg:entry.arg}});
+}
 async function refreshMenu():Promise<void>{
   if(refreshing){refreshAgain=true;return refreshing;}
   refreshing=(async()=>{
@@ -36,6 +44,9 @@ async function refreshMenu():Promise<void>{
       // Unique generations also prevent a queued event from an old native menu
       // from accidentally selecting a different item after replacement.
       await raw('menu.install',serializeMenu(template,`${menuInstance}-${++menuGeneration}`));
+      if(platform==='win32'&&location.pathname.endsWith('index.html')) {
+        windowsMenu ||= new WindowsMenu(dispatchMenu); windowsMenu.update(template);
+      }
     } while(refreshAgain);
   })().finally(()=>{refreshing=undefined;});return refreshing;
 }

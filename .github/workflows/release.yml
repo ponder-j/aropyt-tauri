@@ -54,6 +54,9 @@ jobs:
       - run: npm ci
       - name: Build and test Windows installer
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: ./tools/release-windows.ps1
       - uses: actions/upload-artifact@v7
         if: always()
@@ -64,7 +67,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: installer-windows-x64
-          path: release/artifacts/*-setup.exe
+          path: release/artifacts/
           if-no-files-found: error
 
   linux:
@@ -175,11 +178,11 @@ jobs:
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "Aropyt ${RELEASE_TAG#v}" --notes-file release-notes.md
           fi
-          gh release upload "$RELEASE_TAG" ./*.exe ./*.deb ./*.AppImage ./*_verification.zip SHA256SUMS.txt --clobber
+          gh release upload "$RELEASE_TAG" ./*.exe ./*.exe.sig latest.json ./*.deb ./*.AppImage ./*_verification.zip SHA256SUMS.txt --clobber
           release_id=$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')
           gh api "repos/$GH_REPO/releases/$release_id" \
             --jq '.assets[] | [.name, .digest] | @tsv' > remote-assets.tsv
-          test "$(wc -l < remote-assets.tsv)" -eq 5
+          test "$(wc -l < remote-assets.tsv)" -eq 7
           while IFS=$'\t' read -r filename digest; do
             test -f "$filename"
             actual=$(sha256sum "$filename" | cut -d ' ' -f 1)

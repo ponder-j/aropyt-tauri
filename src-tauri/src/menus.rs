@@ -97,10 +97,8 @@ fn build(
                 let hint = e["accelerator"]
                     .as_str()
                     .unwrap_or("")
-                    .replace("CommandOrControl+", "⌘")
-                    .replace("Ctrl+", "Ctrl+")
-                    .replace("Shift+", "⇧")
-                    .replace("Alt+", "⌥");
+                    .replace("CommandOrControl+", "Ctrl+")
+                    .replace("CmdOrCtrl+", "Ctrl+");
                 format!("{label}\t{hint}")
             } else {
                 label.to_string()
@@ -169,6 +167,9 @@ pub fn install(app: &AppHandle, template: Value) -> Result<()> {
     }
     *st.menu_actions.lock().unwrap() = actions;
     *st.menu_template.lock().unwrap() = template.clone();
+    // Windows renders a roomier, DPI-aware menu in the WebView. Keep the same
+    // native command table for targeted dispatch, but no second menu/accelerators.
+    #[cfg(not(target_os = "windows"))]
     app.set_menu(menu).map_err(err)?;
     #[cfg(target_os = "macos")]
     crate::native::menu_hints(&template)?;

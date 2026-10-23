@@ -30,9 +30,9 @@ export function buildMenu(ctx: MenuCtx): Menu {
     extra: Partial<MenuItemConstructorOptions> = {},
   ): MenuItemConstructorOptions => ({
     label,
-    accelerator: accel ? toElectronAccel(accel) : undefined,
+    accelerator: s.keyBinding?.[action] ? toElectronAccel(String(s.keyBinding[action])) : accel ? toElectronAccel(accel) : undefined,
     // Editing shortcuts belong to the renderer, which owns the selection.
-    registerAccelerator: accel ? !RENDERER_KEYS.has(accel) : undefined,
+    registerAccelerator: s.keyBinding?.[action] ? false : accel ? !RENDERER_KEYS.has(accel) : undefined,
     event: 'menu', action, arg,
     ...extra,
   });
@@ -222,7 +222,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
         {
           label: t('table'),
           submenu: [
-            item(t('insertTable'), 'insertTable'),
+            item(t('insertTable'), 'insertTable', ACCEL.insertTable),
             sep,
             item(t('tableRowBefore'), 'tableRowBefore'),
             item(t('tableRowAfter'), 'tableRowAfter', 'Ctrl+Enter'),
@@ -307,7 +307,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
         {
           label: t('image'),
           submenu: [
-            item(t('insertImage'), 'insertImage'),
+            item(t('insertImage'), 'insertImage', ACCEL.insertImage),
             item(t('insertLocalImages'), 'insertLocalImages'),
             item(t('uploadAllImages'), 'uploadAllImages'),
           ],
@@ -373,6 +373,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
         item(t('projectRepository'), 'help:repository'),
         item(t('license'), 'help:license'),
         item(t('about'), 'about'),
+        item(t('checkForUpdates'), 'checkForUpdates'),
         sep,
         // Language switch
         {

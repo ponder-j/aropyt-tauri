@@ -1332,3 +1332,19 @@ html.theme-dark .hljs-comment { color:#888; }
 .editor-context-menu .context-icon-button { display:flex;flex:1;justify-content:center;min-width:35px;width:35px;min-height:27px;padding:3px 8px;border:1px solid var(--chrome-border,#ddd);border-radius:2px;font-size:13px; }
 #context-menu-for-source { min-width:150px; }
 #switch-img-syntax-menu { font-size:11px; }
+
+/* Match Typora's Windows menu: 26px bar, 28px rows and a separate key column. */
+#aropyt-menubar { display:flex; flex:0 0 26px; align-items:stretch; height:26px; padding:0 2px; z-index:2300; background:var(--bg-color,#fff); color:var(--text-color,#333); font:12px "Segoe UI","Microsoft YaHei UI",sans-serif; user-select:none; }
+#aropyt-menubar button { appearance:none; border:0; border-radius:0; margin:0; padding:0 6px; background:transparent; color:inherit; font:inherit; cursor:default; white-space:nowrap; }
+#aropyt-menubar button:hover, #aropyt-menubar button[aria-expanded="true"], #aropyt-menubar button:focus-visible { background:var(--chrome-hover); outline:none; }
+.aropyt-app-menu { position:fixed; z-index:2301; min-width:240px; max-width:calc(100vw - 8px); max-height:calc(100vh - 32px); overflow:auto; padding:5px 0; border:1px solid var(--chrome-border,#ddd); border-radius:3px; background:var(--bg-color,#fff); color:var(--text-color,#333); box-shadow:0 6px 18px #0003; font:12px "Segoe UI","Microsoft YaHei UI",sans-serif; user-select:none; }
+.aropyt-app-menu-item { appearance:none; display:flex; align-items:center; gap:0; width:100%; min-height:28px; margin:0; padding:4px 20px 4px 4px; border:0; border-radius:0; background:transparent; color:inherit; font:inherit; line-height:20px; text-align:left; cursor:default; white-space:nowrap; }
+.aropyt-menu-check { flex:0 0 16px; text-align:center; }
+.aropyt-menu-label { flex:1; }
+.aropyt-menu-hint { margin-left:32px; color:var(--chrome-fg); }
+.aropyt-app-menu-item:disabled { opacity:.4; }
+.aropyt-app-menu-item:not(:disabled):hover, .aropyt-app-menu-item:focus-visible { background:var(--chrome-hover); outline:none; }
+.aropyt-menu-separator { height:1px; margin:8px 0; background:var(--chrome-border,#ddd); }
+.windows-menu-chrome .editor-context-menu { font-family:"Segoe UI","Microsoft YaHei UI",sans-serif; }
+.windows-menu-chrome .editor-context-menu button { min-height:28px; }
+.windows-menu-chrome .editor-context-menu .context-shortcut { font-size:12px; }

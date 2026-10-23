@@ -4,6 +4,7 @@ import { blockRanges, standaloneImage, documentReferences } from './md';
 import { codeFence } from './code-fences';
 import { tableSelection, focusTableRange } from './table-editor';
 import { IMAGE_ZOOM_LEVELS, replaceImageSource, ImageSourceRange } from './image-actions';
+import { shortcutHint } from '../shared/shortcuts';
 
 interface Item {
   key: string; label?: string; group?: string; icon?: string; shortcut?: string;
@@ -101,8 +102,9 @@ export class EditorContextMenu {
     const source = this.editor.isSourceMode;
     const { lang, settings, spelling, file, resolveImage } = this.options(), zh = lang === 'zh';
     const text = (cn: string, en: string) => zh ? cn : en;
-    const mod = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+';
-    const cmd = (key: string, cn: string, en: string, shortcut = ''): Item => ({ key, label: text(cn, en), shortcut, run: this.command(key) });
+    const mod = 'Ctrl+', shift = 'Shift+';
+    const cmd = (key: string, cn: string, en: string, shortcut = ''): Item => ({ key, label: text(cn, en),
+      shortcut: shortcutHint(settings.keyBinding?.[key] || shortcut), run: this.command(key) });
     const sep = (group?: string): Item => ({ key: 'divider', group });
     const clipboard = (key: string, cn: string, en: string, icon: string): Item => ({ key, label: text(cn, en), icon,
       run: key === 'del' ? this.command('del') : () => this.invoke('webContents.' + key) });
@@ -166,7 +168,7 @@ export class EditorContextMenu {
       clip.forEach(item => item.disabled = true);
     }
     if (video) group('video', [{ key: 'play', label: text('播放', 'Play'), run: () => video.play() }, { key: 'pause', label: text('暂停', 'Pause'), run: () => video.pause() }, sep()]);
-    if (href) group('hyperlink', [{ key: 'jumpto', label: text('打开链接', 'Open Link'), shortcut: mod + text('单击', 'Click'), run: () => this.openLink(href) }, sep()]);
+    if (href) group('hyperlink', [{ key: 'jumpto', label: text('打开链接', 'Open Link'), shortcut: shortcutHint(mod) + text('单击', 'Click'), run: () => this.openLink(href) }, sep()]);
     const word = !image && !mathRoot && (!code || settings.spellcheckForCodeAndLink) && (!href || settings.spellcheckForCodeAndLink) && spelling ? this.wordAt(event) : null;
     if (selected.trim() && !selected.includes('\n') && !image && !mathRoot) group('search', [{ key: 'search-with', label: text('搜索', 'Search With'), menuId: 'search-menu', children:
       [['Google', 'https://www.google.com/search?q='], ['Bing', 'https://www.bing.com/search?q='], [text('百度', 'Baidu'), 'https://www.baidu.com/s?wd=']].map(([label, url]) => ({ key: 'search:' + label, label, run: () => this.invoke('shell.openExternal', url + encodeURIComponent(selected)) })) }, sep()]);
@@ -176,7 +178,7 @@ export class EditorContextMenu {
     const emoji = target.closest<HTMLElement>('.md-emoji.md-expand [data-emoji]')?.dataset.emoji;
     if (emoji) group('emoji', [{ key: 'copy-emoji', label: text('复制 ', 'Copy ') + '“' + emoji + '”', run: () => this.invoke('clipboard.writeRich', emoji, '') }]);
     if (image) group('image', [{ key: 'copy-img', label: text('拷贝图片', 'Copy Image Content'), run: () => this.invoke('images.copyImage', resolveImage(image.src)) }]);
-    const copyAs = [cmd('copyAsMarkdown', '复制为 Markdown', 'Copy as Markdown', mod + '⇧C'),
+    const copyAs = [cmd('copyAsMarkdown', '复制为 Markdown', 'Copy as Markdown', mod + shift + 'C'),
       cmd('copyAsHtmlCode', '复制为 HTML 代码', 'Copy as HTML Code'), cmd('copySimple', '复制为无样式 HTML', 'Copy without Theme Styling')];
     const media = svg ? this.media(svg) : null;
     if (media) copyAs.push(sep(), { key: 'copy_as_image', label: text('复制为图片', 'Copy as Image'), run: () => this.invoke('media.output', media, 'copy') });
@@ -186,7 +188,7 @@ export class EditorContextMenu {
         { key: 'copy_as_mathml', label: text('复制为 MathML', 'Copy as MathML'), run: async () => this.invoke('clipboard.writeRich', await mathml(), '') },
         { key: 'copy_as_math_tex', label: text('复制为 TeX', 'Copy as TeX'), run: () => this.invoke('clipboard.writeRich', tex, '') });
     }
-    copyAs.push(sep(), { ...cmd('pasteAsPlain', '粘贴为纯文本', 'Paste as Plain Text', mod + '⇧V'), disabled: !!image || !!raw });
+    copyAs.push(sep(), { ...cmd('pasteAsPlain', '粘贴为纯文本', 'Paste as Plain Text', mod + shift + 'V'), disabled: !!image || !!raw });
     group('copy-paste', [{ key: 'copy-as', label: text('复制 / 粘贴为…', 'Copy / Paste As…'), menuId: 'edit-menu', children: copyAs }]);
     if (code) {
       const content = this.editor.view.state.sliceDoc(code.bodyFrom, code.bodyTo);
@@ -226,7 +228,7 @@ export class EditorContextMenu {
     if (table && cell) {
       const row = Number(cell.dataset.row), col = Number(cell.dataset.col);
       const rows = table.querySelectorAll('tr').length, cols = table.querySelectorAll('th').length;
-      const tableCommand = (key: string, cn: string, en: string, shortcut = '', disabled = false): Item => ({ key, label: text(cn, en), shortcut, disabled, run: () => {
+      const tableCommand = (key: string, cn: string, en: string, shortcut = '', disabled = false): Item => ({ key, label: text(cn, en), shortcut: shortcutHint(settings.keyBinding?.[key] || shortcut), disabled, run: () => {
         if (key === 'copyTable') return this.invoke('clipboard.writeRich', this.editor.view.state.sliceDoc(Number(table.dataset.from), Number(table.dataset.to)), table.querySelector('table')?.outerHTML || '');
         if (document.activeElement !== cell) cell.focus({ preventScroll: true });
         return this.action(key);
@@ -236,7 +238,7 @@ export class EditorContextMenu {
         tableCommand('tableColumnBefore', '在左侧插入列', 'Add Column Before'), tableCommand('tableColumnAfter', '在右侧插入列', 'Add Column After'), sep(),
         tableCommand('tableRowUp', '向上移动行', 'Move Row Up', 'Alt+↑', row === 0), tableCommand('tableRowDown', '向下移动行', 'Move Row Down', 'Alt+↓', row === rows - 1),
         tableCommand('tableColumnLeft', '向左移动列', 'Move Column Left', 'Alt+←', col === 0), tableCommand('tableColumnRight', '向右移动列', 'Move Column Right', 'Alt+→', col === cols - 1), sep(),
-        tableCommand('tableDeleteRow', '删除行', 'Delete Row', mod + '⇧Backspace'), tableCommand('tableDeleteColumn', '删除列', 'Delete Column'), sep(),
+        tableCommand('tableDeleteRow', '删除行', 'Delete Row', mod + shift + 'Backspace'), tableCommand('tableDeleteColumn', '删除列', 'Delete Column'), sep(),
         tableCommand('copyTable', '复制表格', 'Copy Table'), tableCommand('prettifyTable', '整理表格', 'Prettify'), sep(), tableCommand('deleteTable', '删除表格', 'Delete Table') ] }]);
     } else if (!raw && !mathBlock) {
       const level = block?.kind === 'heading_open' ? /^\s*(#{1,6})\s/.exec(block.text)?.[1].length || 0 : 0;
@@ -247,9 +249,9 @@ export class EditorContextMenu {
         { ...cmd('heading:0', '段落', 'Paragraph', mod + '0'), checked: level === 0 }] }]);
     }
     group('insert', [{ key: 'insert', label: text('插入', 'Insert'), menuId: 'insert-menu', children: [
-      cmd('insertImage', '图片', 'Image', mod + '⇧I'), cmd('insertFootnote', '脚注', 'Footnotes'), cmd('insertLinkRef', '链接引用', 'Link Reference'),
-      cmd('insertHr', '水平分割线', 'Horizontal Line'), cmd('insertTable', '表格', 'Table', mod + 'T'), cmd('insertFences', '代码块', 'Code Fences', mod + '⇧K'),
-      cmd('insertMathBlock', '公式块', 'Math Block', mod + '⇧M'), cmd('insertToc', '目录', 'Table of Contents'), cmd('insertFrontMatter', 'YAML 元数据', 'YAML Front Matter'), sep(),
+      cmd('insertImage', '图片', 'Image', mod + shift + 'I'), cmd('insertFootnote', '脚注', 'Footnotes'), cmd('insertLinkRef', '链接引用', 'Link Reference'),
+      cmd('insertHr', '水平分割线', 'Horizontal Line'), cmd('insertTable', '表格', 'Table', mod + shift + 'T'), cmd('insertFences', '代码块', 'Code Fences', mod + shift + 'K'),
+      cmd('insertMathBlock', '公式块', 'Math Block', mod + shift + 'M'), cmd('insertToc', '目录', 'Table of Contents'), cmd('insertFrontMatter', 'YAML 元数据', 'YAML Front Matter'), sep(),
       cmd('insertParagraphBefore', '段落（上方）', 'Paragraph (Before)'), cmd('insertParagraphAfter', '段落（下方）', 'Paragraph (After)') ] }]);
     if (raw || mediaRoot && !mathRoot?.matches('.cm-inline-math-widget,.md-inline-math,.md-table-math-preview')) group('delete-block', [sep(), { key: 'delete-block', label: text(mathRoot ? '删除公式块' : mediaRoot ? '删除图表' : '删除 HTML 块', 'Delete Block'), run: () => {
       const from = raw?.dataset.line || mediaRoot?.closest<HTMLElement>('[data-line]')?.dataset.line;

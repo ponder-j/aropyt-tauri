@@ -67,6 +67,11 @@ try{
  await invoke('setting.put','trimTrailingWhitespace',false);await invoke('setting.put','insertFinalNewLineOnSave',false);await invoke('setting.put','lineEndings','lf');
  const id=await invoke('document.saveDraft',source,'RECOVERY','utf-8');assert.equal((await invoke('document.getDraft',id)).content,'RECOVERY');await invoke('document.removeDraft',id);pass('Native encodings, save preferences and atomic recovery drafts round-trip');
  assert((await js('window.JSBridge.invoke("menu.dump")')).lines.length>180);pass('Complete original native menu structure is installed');
+ if(process.platform==='win32') {
+  const output=await build({entryPoints:['tests/windows-menu.ts'],bundle:true,write:false,platform:'browser'});
+  await js(`(0,eval)(${JSON.stringify(output.outputFiles[0].text)})`);
+  for(const check of await js('window.runWindowsMenuChecks()'))pass(check);
+ }
  if(['darwin','linux'].includes(process.platform)){
   const flatten=items=>items.flatMap(item=>[item,...flatten(item.submenu||[])]);
   const closed=flatten(await call({op:'native-menu'})),shown=flatten(await call({op:'native-menu',preview:true}));

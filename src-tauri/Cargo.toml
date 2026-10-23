@@ -37,6 +37,7 @@ chrono = "0.4"
 shlex = "1"
 wait-timeout = "0.2"
 pulldown-cmark = "0.13"
+tauri-plugin-updater = "2"
 
 
 [target.'cfg(windows)'.dependencies]

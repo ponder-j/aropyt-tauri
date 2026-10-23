@@ -2,6 +2,8 @@
 
 # Aropyt · Tauri 2
 
+Windows menus use Typora-like spacing, Ctrl/Alt/Shift shortcut labels and Alt access keys. Windows checks GitHub for updates on startup; **Help → Check for Updates** also checks manually. Installation requires confirmation, verifies the update signature, saves all open documents, then installs over the current app and restarts it.
+
 A lightweight Markdown desktop editor, migrated from the Electron version of Aropyt to **Tauri 2 + Rust + the system WebView**, retaining the existing TypeScript / CodeMirror 6 editor, interface, themes and application behavior.
 
 ## Features

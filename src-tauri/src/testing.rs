@@ -7,6 +7,11 @@ use std::{
 use tauri::{AppHandle, Manager};
 // Opt-in loopback harness, protected by an unguessable token. Never starts in
 // normal app launches; it tests the same native webview and command dispatcher.
+pub fn isolated() -> bool {
+    std::env::var_os("AROPYT_DATA_DIR").is_some()
+        && std::env::var("AROPYT_TEST_PORT").ok().and_then(|v| v.parse::<u16>().ok()).is_some()
+        && std::env::var("AROPYT_TEST_TOKEN").is_ok_and(|v| v.len() >= 32)
+}
 pub fn start(app: &AppHandle) {
     let Ok(port) = std::env::var("AROPYT_TEST_PORT") else {
         return;
@@ -96,6 +101,7 @@ fn request(mut stream: TcpStream, app: AppHandle, token: &str) -> Result<()> {
                 Ok(json!(true))
             }
             "menu-event" => crate::menus::dispatch_label(&app, &win, req["label"].as_str().unwrap_or("")),
+            "update-fixture" => crate::updates::test_fixture(&app, &win, req["manifest"].clone(), req["file"].as_str().unwrap_or(""), req["stage"] == true),
             #[cfg(target_os = "macos")]
             "native-menu" => crate::menus::mac_snapshot(req["preview"] == true),
             #[cfg(target_os = "linux")]

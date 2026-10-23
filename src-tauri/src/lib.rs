@@ -9,6 +9,7 @@ mod menus;
 mod native;
 mod state;
 mod testing;
+mod updates;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -212,6 +213,7 @@ pub fn dispatch(
     let v = |n| value(args, n);
     let ok = || Ok(json!(true));
     match method {
+        method if method.starts_with("update.") => updates::dispatch(app, win, method),
         "app.setUiLocale" => {
             st.update_ui_language(app, Some(text(0)));
             ok()
@@ -990,6 +992,7 @@ fn launch_files(argv: impl Iterator<Item = String>, cwd: &Path) -> Vec<String> {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init());
     // An isolated harness must not forward its temporary fixture to a user's
     // already running editor or reuse that editor's profile.
@@ -1013,6 +1016,7 @@ pub fn run() {
             let _ = native::HOST.set(app.handle().clone());
             let state = AppState::new(app.handle()).map_err(std::io::Error::other)?;
             app.manage(state);
+            app.manage(updates::Updates::default());
             let initial = launch_files(std::env::args().skip(1), &std::env::current_dir()?);
             let settings = app.state::<AppState>().config();
             let restored: Vec<String> = if initial.is_empty() && settings["onLaunch"] == "both" {

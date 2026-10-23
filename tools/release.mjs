@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { updaterManifest } from './updater-manifest.mjs';
 
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -59,11 +60,19 @@ export async function assemble(root = '.', commit = process.env.GITHUB_SHA) {
   const { zipSync } = await import('fflate');
   const archiveName = `Aropyt_${version}_verification.zip`;
   const archive = zipSync(evidence, { level: 6 });
+  const windows = path.join(download, 'installer-windows-x64');
+  const signatureName = `Aropyt_${version}_x64-setup.exe.sig`;
+  const signature = await readFile(path.join(windows, signatureName));
+  const latest = Buffer.from(JSON.stringify(await updaterManifest(windows, version), null, 2) + '\n');
   await mkdir(output, { recursive: true });
   // Validate every platform before writing anything that can be published.
   for (const asset of assets) await copyFile(asset.file, path.join(output, asset.name));
   await writeFile(path.join(output, archiveName), archive);
   const checksums = [...assets, { name: archiveName, sha256: sha256(archive) }];
+  for (const [name, bytes] of [[signatureName, signature], ['latest.json', latest]]) {
+    await writeFile(path.join(output, name), bytes);
+    checksums.push({ name, sha256: sha256(bytes) });
+  }
   await writeFile(path.join(output, 'SHA256SUMS.txt'), checksums.map(a => `${a.sha256}  ${a.name}\n`).join(''));
   await writeFile(path.join(output, 'release-notes.md'), `Windows x64 NSIS 与 Docker Linux x64 DEB / AppImage。\n\n三个安装产物分别通过完整 WebView 回归（至少 84 项），覆盖编辑、文件、拼写、Pandoc、PDF/PNG 和多窗口。\n\n附测试证据和 SHA-256 校验。Windows 包未签名；词典按需下载，Pandoc 为可选外部工具。Linux AppImage 在 Docker 中使用 extract-and-run 验证。\n\n源码提交：\`${commit}\`。\n`);
   return manifest;
