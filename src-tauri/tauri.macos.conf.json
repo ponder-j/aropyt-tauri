@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "resources": {
+      "updater-build.json": "updater-build.json"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/ponder-j/aropyt-tauri/releases/latest/download/latest-macos.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVGMzA3QUU0QjE4QzAyOUYKUldTZkFveXg1SG93NytXOUdrcUpvUjNZc1J6VS82aFRwTXI0Q3M1a0pRZnlJc1lROVBpcVZvYjMK",
+      "requireSignedVersion": true
+    }
+  }
+}

@@ -1211,6 +1211,39 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     undo(view); await frame(); assert(cell.textContent === 'Apple' && editor.value.includes('| Apple | 2 |'), 'Undo did not restore cell and source together');
     redo(view); await frame(); assert(cell.textContent === 'Pear | 黄', 'Redo lost the cell edit');
   });
+  await test('Wide tables scroll independently and reveal the cell reached by Tab', async () => {
+    const columns = Array.from({ length: 10 }, (_, index) => `Column ${index + 1}`);
+    const row = (cells: string[]) => `| ${cells.join(' | ')} |`;
+    const source = ['Before', '', row(columns), row(columns.map(() => '---')), row(columns), '', 'After'].join('\n');
+    view.contentDOM.style.maxWidth = '360px';
+    try {
+      editor.setValue(source); cursor(0); await frame();
+      const scroll = parent.querySelector<HTMLElement>('.md-table-scroll')!;
+      const preceding = parent.querySelector('.cm-line')!;
+      const left = preceding.getBoundingClientRect().left;
+      assert(scroll && scroll.scrollWidth > scroll.clientWidth, 'The wide table has no local horizontal scroll range');
+      assert(view.scrollDOM.scrollWidth <= view.scrollDOM.clientWidth + 1, 'Table overflow widened the document scroller');
+      const wheel = new WheelEvent('wheel', { shiftKey: true, deltaY: 120, bubbles: true, cancelable: true });
+      scroll.dispatchEvent(wheel);
+      assert(wheel.defaultPrevented && scroll.scrollLeft > 0, 'Shift+wheel did not pan the table');
+      assert(preceding.getBoundingClientRect().left === left, 'Panning the table moved the preceding paragraph');
+      const cell = (column: number) => scroll.querySelector<HTMLElement>(`td[data-col="${column}"]`)!;
+      cell(0).focus();
+      for (let column = 0; column < columns.length - 1; column++) {
+        cell(column).dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+      }
+      await frame();
+      const last = cell(columns.length - 1);
+      assert(document.activeElement === last, 'Tab did not focus the last cell');
+      assert(last.getBoundingClientRect().right <= scroll.getBoundingClientRect().right + 1, 'Keyboard navigation left the last cell clipped');
+      assert(view.scrollDOM.scrollLeft === 0 && editor.value === source, 'Table navigation moved the document or modified its source');
+      const offset = scroll.scrollLeft;
+      assert(editor.handleTableAction('insertParagraphAfter'), 'Could not insert a row in the wide table');
+      await frame();
+      const replacement = parent.querySelector<HTMLElement>('.md-table-scroll')!;
+      assert(replacement !== scroll && Math.abs(replacement.scrollLeft - offset) <= 1, 'Adding a row reset the horizontal table position');
+    } finally { view.contentDOM.style.maxWidth = ''; }
+  });
   await test('Table Tab adds a row, Enter selects the next row and Shift Enter inserts a line break', async () => {
     editor.setValue('Before\n\n| Item | Count |\n| --- | --- |\n| Apple | 2 |\n| Banana | 3 |\n\nAfter'); cursor(0); await frame();
     const cell = (r: number, c: number) => parent.querySelector<HTMLElement>(`[data-row="${r}"][data-col="${c}"]`)!;

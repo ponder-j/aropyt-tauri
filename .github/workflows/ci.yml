@@ -50,6 +50,9 @@ jobs:
         run: dbus-run-session -- xvfb-run -a node tools/test-tauri.mjs --no-build
       - name: Package
         run: npm run package:dir
+      - name: macOS LaunchServices startup regression
+        if: runner.os == 'macOS'
+        run: npm run test:macos-launch
       - uses: actions/upload-artifact@v4
         if: always()
         with:

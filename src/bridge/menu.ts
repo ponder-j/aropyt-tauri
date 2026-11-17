@@ -1,6 +1,7 @@
 import { app, Menu, MenuItemConstructorOptions, loadSettings, platform } from './menu-host';
 const path = { basename: (p: string) => p.split(/[\\/]/).pop() || '' };
 import { ACCEL, Lang, LangPref, LabelKey, RENDERER_KEYS, pick, resolveLang } from '../main/menu-model';
+import { defaultShortcut, shortcutAccelerator } from '../shared/shortcuts';
 
 interface MenuCtx {
   listThemes: () => string[];
@@ -30,7 +31,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
     extra: Partial<MenuItemConstructorOptions> = {},
   ): MenuItemConstructorOptions => ({
     label,
-    accelerator: s.keyBinding?.[action] ? toElectronAccel(String(s.keyBinding[action])) : accel ? toElectronAccel(accel) : undefined,
+    accelerator: s.keyBinding?.[action] ? toElectronAccel(String(s.keyBinding[action])) : accel ? toElectronAccel(defaultShortcut(action, accel)) : undefined,
     // Editing shortcuts belong to the renderer, which owns the selection.
     registerAccelerator: s.keyBinding?.[action] ? false : accel ? !RENDERER_KEYS.has(accel) : undefined,
     event: 'menu', action, arg,
@@ -151,7 +152,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
         item(t('copyHtml'), 'copyAsHtmlCode'),
         item(t('copySimple'), 'copySimple'),
         sep,
-        { label: t('pastePlain'), role: 'pasteAndMatchStyle', accelerator: toElectronAccel(ACCEL.pastePlain) },
+        { label: t('pastePlain'), role: 'pasteAndMatchStyle', accelerator: toElectronAccel(defaultShortcut('pasteAsPlain', ACCEL.pastePlain)) },
         sep,
         {
           label: t('select'),
@@ -427,7 +428,7 @@ export function buildMenu(ctx: MenuCtx): Menu {
 
 /** Translates our display accelerators into Electron's syntax. */
 function toElectronAccel(accel: string): string {
-  return platform === 'darwin' ? accel.replace(/^Ctrl\+/, 'CommandOrControl+') : accel;
+  return shortcutAccelerator(accel, platform === 'darwin');
 }
 
 export function menuLanguage(): Lang {

@@ -1,0 +1,132 @@
+import { spawn, execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, writeFile, realpath, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import http from 'node:http';
+import assert from 'node:assert/strict';
+import { randomBytes, createHash } from 'node:crypto';
+
+const [bundleArg, archiveArg, ...flags] = process.argv.slice(2);
+if (process.platform !== 'darwin' || !bundleArg || !archiveArg) throw Error('Usage: node tools/test-macos-updater.mjs <isolated-Aropyt.app> <signed-app.tar.gz> [--online]');
+const bundle = await realpath(bundleArg), archive = path.resolve(archiveArg), online = flags.includes('--online');
+assert(bundle.startsWith(path.resolve('release/macos-updater/install-test') + (bundle.includes('install-test-online') ? '-online/' : '/')), 'Only a release/macos-updater/install-test installation may be replaced');
+const output = path.resolve('release/macos-updater/verification'); await mkdir(output, { recursive: true });
+const work = await realpath(await mkdtemp(path.join(tmpdir(), 'aropyt-macos-update-')));
+const profile = path.join(work, 'profile'); await mkdir(path.join(profile, 'conf'), { recursive: true });
+const updateProxy = online ? process.env.AROPYT_TEST_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '' : '';
+await writeFile(path.join(profile, 'conf/conf.user.json'), JSON.stringify({ onLaunch: 'new', spellCheck: false, autoSave: false, updateProxy }));
+const file = path.join(work, 'Main.md'), secondFile = path.join(work, 'Second.md');
+await writeFile(file, 'Main before update'); await writeFile(secondFile, 'Second before update');
+const server = net.createServer(); await new Promise(r => server.listen(0, '127.0.0.1', r));
+const port = server.address().port; await new Promise(r => server.close(r));
+const token = randomBytes(32).toString('hex');
+const binary = path.join(bundle, 'Contents/MacOS/aropyt');
+const hash = async file => createHash('sha256').update(await readFile(file)).digest('hex');
+const expectedHash = await hash(binary), bytes = await readFile(archive);
+const corrupt = Buffer.from(bytes); corrupt[corrupt.length - 1] ^= 1;
+let corruptDownload = false, requests = 0;
+const downloads = http.createServer((_req, res) => { requests++; const body = corruptDownload ? corrupt : bytes; res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': body.length }); res.end(body); });
+await new Promise(r => downloads.listen(0, '127.0.0.1', r));
+const latest = JSON.parse(await readFile(path.join(path.dirname(archive), 'latest-macos.json'), 'utf8'));
+const target = process.arch === 'arm64' ? 'darwin-aarch64' : 'darwin-x86_64';
+const local = { ...latest, platforms: { [target]: { ...latest.platforms[target], url: `http://127.0.0.1:${downloads.address().port}/app.tar.gz` } } };
+const manifest = online ? latest : local;
+const childEnv = { ...process.env, AROPYT_DATA_DIR: profile, AROPYT_TEST_PORT: String(port), AROPYT_TEST_TOKEN: token };
+if (online) for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']) delete childEnv[key];
+const child = spawn(binary, [file, '-ApplePersistenceIgnoreState', 'YES'], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+let logs = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', d => logs += d);
+let windowLabel;
+const call = async payload => {
+  const response = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ window: windowLabel, ...payload }), signal: AbortSignal.timeout(payload.method === 'update.download' ? 630000 : 30000) });
+  const result = await response.json(); if (!result.ok) throw Error(result.error); return result.value;
+};
+const js = (code, window = windowLabel) => call({ op: 'eval', code, window });
+const invoke = (method, ...args) => call({ op: 'invoke', method, args });
+const wait = async (fn, timeout = 90000) => { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await fn(); if (value) return value; } catch (e) { last = e; } await new Promise(r => setTimeout(r, 100)); } throw Error('Update test timed out: ' + last + '\n' + logs); };
+const passed = [], pass = text => { passed.push(text); console.log('PASS ' + text); };
+const stage = data => call({ op: 'update-fixture', manifest: data, file: archive, stage: true });
+try {
+  await wait(() => js('Boolean(window.__aropyt)'));
+  windowLabel = (await call({ op: 'windows' })).find(w => w.startsWith('editor-'));
+  await invoke('setting.put', 'updateProxy', 'invalid://proxy');
+  await assert.rejects(invoke('update.check'), /proxy|代理/i);
+  await invoke('setting.put', 'updateProxy', updateProxy);
+  pass('Invalid proxy settings report a clear configuration error without starting an update');
+  // Match the production check -> download lifecycle. check() initializes the
+  // plugin's TLS provider even before this new endpoint has been published.
+  await invoke('update.check').catch(() => {});
+  const identity = await invoke('update.info'); assert.equal(identity.version, latest.version); assert.equal(identity.build, latest.build);
+  assert.equal(await invoke('update.claimStartup'), false);
+  assert.equal(await call({ op: 'update-fixture', manifest: latest, file: archive }), null);
+  assert.equal(await call({ op: 'update-fixture', manifest: { ...latest, pub_date: new Date((latest.build - 1) * 1000).toISOString() }, file: archive }), null);
+  assert.equal(await call({ op: 'update-fixture', manifest: { ...latest, version: '0.0.1' }, file: archive }), null);
+  await assert.rejects(call({ op: 'update-fixture', manifest: { ...latest, pub_date: new Date((latest.build + 1) * 1000).toISOString() }, file: archive }), /build|构建/);
+  await assert.rejects(stage({ ...latest, version: '99.0.0' }), /version|版本|tampered/);
+  pass('Mac checks ignore the current/older build and reject relabelled builds or versions');
+  const tampered = path.join(work, 'tampered.tar.gz'); await writeFile(tampered, corrupt);
+  await assert.rejects(call({ op: 'update-fixture', manifest, file: tampered, stage: true }));
+  await assert.rejects(stage({ ...manifest, platforms: { [target]: { ...manifest.platforms[target], signature: 'invalid' } } }));
+  assert.equal((await stage(manifest)).verified, true);
+  pass('Real Mac updater verifies the signed archive and rejects changed bytes and invalid signatures');
+  if (!online) {
+    corruptDownload = true; await assert.rejects(invoke('update.download'), /signature|verify|minisign|签名|verification/i); corruptDownload = false;
+    assert.equal(await hash(binary), expectedHash);
+    pass('A corrupted HTTP download fails signature verification without touching the installed app');
+  }
+  await invoke('update.download');
+  pass(online ? 'Real updater downloads and verifies the signed Mac archive from GitHub' : 'Real updater downloads and verifies the signed Mac archive over HTTP in isolation');
+  await invoke('bridge.send', 'doc.syncChange', { dirty: true });
+  await assert.rejects(invoke('update.install'), /unsaved|未保存/);
+  const second = await call({ op: 'new', file: secondFile });
+  await wait(() => js('Boolean(window.__aropyt)', second));
+  await assert.rejects(call({ op: 'invoke', window: second, method: 'update.clear', args: [] }), /Another window|另一窗口/);
+  await invoke('bridge.send', 'doc.syncChange', { dirty: false });
+  pass('Unsaved documents block native installation and another window cannot replace the pending update');
+  const untitled = await call({ op: 'new' }); await wait(() => js('Boolean(window.__aropyt)', untitled));
+  await js(`window.__aropyt.getEditor().setValue('Unsaved test draft');window.__realInvoke=window.JSBridge.invoke;window.JSBridge.invoke=(method,...args)=>method==='export.saveFile'?Promise.resolve(null):window.__realInvoke(method,...args);`, untitled);
+  const info = { version: latest.version, currentVersion: latest.version, body: latest.notes };
+  await js(`window.__realUpdateInvoke=window.JSBridge.invoke;window.__installCalls=0;window.JSBridge.invoke=(method,...args)=>{if(method==='update.check')return Promise.resolve(${JSON.stringify(info)});if(method==='update.install')window.__installCalls++;return window.__realUpdateInvoke(method,...args)};`);
+  const offer = async () => {
+    await stage(manifest);
+    await js(`window.__updateFinished=false;window.__aropyt.runAction('checkForUpdates').then(()=>window.__updateFinished=true);true`);
+    await wait(() => js(`Boolean(document.querySelector('dialog[open]'))`));
+    await js(`document.querySelector('dialog[open] .dialog-actions button').click()`);
+  };
+  await offer(); await wait(() => js('window.__updateFinished'));
+  assert.equal(await js('window.__installCalls'), 0); assert((await call({ op: 'windows' })).includes(untitled));
+  assert.equal(await js('window.__aropyt.getEditor().value', untitled), 'Unsaved test draft');
+  pass('Cancelling Save As in the real update UI aborts installation and leaves the unsaved draft open');
+  await js(`window.__aropyt.state.dirty=false;window.JSBridge.send('doc.syncChange',{dirty:false});`, untitled);
+  await call({ op: 'invoke', window: untitled, method: 'app.onCloseWin', args: [] });
+  for (const [window, text] of [[windowLabel, 'Main saved by updater'], [second, 'Second saved by updater']]) await js(`window.__aropyt.getEditor().setValue(${JSON.stringify(text)})`, window);
+  const exited = new Promise(r => child.once('exit', r));
+  await offer();
+  await Promise.race([exited, new Promise((_, reject) => { const timer = setTimeout(() => reject(Error('The old app did not exit')), 90000); timer.unref(); })]);
+  windowLabel = undefined;
+  const restored = await wait(async () => {
+    const windows = (await call({ op: 'windows' })).filter(w => w.startsWith('editor-'));
+    const docs = await Promise.all(windows.map(window => js(`window.__aropyt?{file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value}:null`, window)));
+    return docs.length === 2 && docs.every(Boolean) ? docs : false;
+  });
+  assert.deepEqual(restored.map(d => d.file).sort(), [file, secondFile].sort());
+  assert.equal(restored.find(d => d.file === file).text, 'Main saved by updater');
+  assert.equal(restored.find(d => d.file === secondFile).text, 'Second saved by updater');
+  assert.equal(await readFile(file, 'utf8'), 'Main saved by updater');
+  assert.equal(await readFile(secondFile, 'utf8'), 'Second saved by updater');
+  assert.equal(await hash(binary), expectedHash);
+  execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
+  assert.equal((await invoke('update.info')).build, identity.build);
+  assert.equal(await call({ op: 'update-fixture', manifest: latest, file: archive }), null);
+  pass('The real update UI saves both documents, replaces the Mac app, restarts via LaunchServices and restores both windows');
+  if (online) {
+    assert.equal(await invoke('update.check'), null);
+    pass('Production GitHub update check works without proxy environment variables and reports the installed build current after restart');
+  } else assert(requests >= 4, 'The download path did not fetch real HTTP bytes');
+  await writeFile(path.join(output, online ? 'updater-online-results.json' : 'updater-results.json'), JSON.stringify({ date: new Date().toISOString(), version: identity.version, build: identity.build, bundle, archive, work, proxyEnvironmentStripped: online, configuredProxy: Boolean(updateProxy), passed }, null, 2) + '\n');
+} finally {
+  await writeFile(path.join(output, online ? 'updater-online-app.log' : 'updater-app.log'), logs);
+  await call({ op: 'quit' }).catch(() => {});
+  if (child.exitCode === null) child.kill();
+  await new Promise(r => downloads.close(r));
+}

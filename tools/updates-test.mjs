@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { macosUpdaterManifest } from './release-macos.mjs';
 
 async function bundle(entry) {
   const result = await build({ entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', write: false });
@@ -15,7 +19,7 @@ test('Windows Shift punctuation and digits match the keys printed in menus', () 
   }
   assert.equal(shortcutCombo({ key: 'b', code: 'KeyB', ctrlKey: true, isComposing: true }, false), '');
   assert.equal(shortcutCombo({ key: 'b', metaKey: true }, false), '');
-  assert.equal(normalizeShortcut('Shift+CommandOrControl+B'), 'ctrl+shift+b');
+  assert.equal(normalizeShortcut('Shift+CommandOrControl+B', false), 'ctrl+shift+b');
   assert.equal(shortcutHint('CommandOrControl+Alt+Shift+B', false), 'Ctrl+Alt+Shift+B');
   assert.equal(shortcutHint('Ctrl+Alt+Shift+B', true), '⌘⌥⇧B');
 });
@@ -51,4 +55,22 @@ test('automatic network failures are quiet; manual failures are visible', async 
 test('up to date and unclaimed startup do not ask to install', async () => {
   const f = fixture({ 'update.check': null }); await f.controller.check(); assert(!f.calls.includes('dialog.showMessageBox'));
   const secondWindow = fixture({ 'update.claimStartup': false }); await secondWindow.controller.startup(); assert.deepEqual(secondWindow.calls, ['update.claimStartup']);
+});
+
+test('a newer build of the same displayed version still offers installation', async () => {
+  const f = fixture({ 'update.check': { version: '1.0.1', currentVersion: '1.0.1', build: 2, currentBuild: 1 } });
+  await f.controller.check(); assert(f.calls.includes('update.install'));
+});
+
+test('macOS manifest binds publication date to the build and uses a revision-specific signed archive', async () => {
+  const work = await mkdtemp(path.join(tmpdir(), 'aropyt-macos-manifest-'));
+  try {
+    const build = { build: 1793451600, date: new Date(1793451600000).toISOString() };
+    const name = `Aropyt_1.0.1_aarch64_${build.build}.app.tar.gz`;
+    await writeFile(path.join(work, name + '.sig'), Buffer.from('untrusted comment: fixture').toString('base64'));
+    const manifest = await macosUpdaterManifest(work, build, '1.0.1', 'arm64');
+    assert.equal(manifest.pub_date, build.date); assert.equal(manifest.version, '1.0.1');
+    assert(manifest.platforms['darwin-aarch64'].url.endsWith('/' + name));
+    await assert.rejects(macosUpdaterManifest(work, { ...build, date: '2020-01-01T00:00:00Z' }, '1.0.1', 'arm64'));
+  } finally { await rm(work, { recursive: true, force: true }); }
 });

@@ -14,6 +14,8 @@ pub static HOST: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 mod portable_export;
 #[cfg(target_os = "macos")]
 extern "C" {
+    fn aropyt_prepare_windows();
+    fn aropyt_window_tab_count(window: *mut c_void) -> usize;
     fn aropyt_render(
         html: *const c_char,
         mode: *const c_char,
@@ -32,6 +34,22 @@ extern "C" {
         callback: extern "C" fn(*mut c_void, *const u8, usize, *const c_char),
         context: *mut c_void,
     );
+}
+
+pub fn prepare_windows() {
+    #[cfg(target_os = "macos")]
+    unsafe { aropyt_prepare_windows() };
+}
+
+#[cfg(target_os = "macos")]
+pub fn window_tab_count(win: &WebviewWindow) -> Result<usize> {
+    let (tx, rx) = mpsc::channel();
+    let target = win.clone();
+    win.run_on_main_thread(move || {
+        let count = target.ns_window().map(|ptr| unsafe { aropyt_window_tab_count(ptr) }).map_err(err);
+        let _ = tx.send(count);
+    }).map_err(err)?;
+    rx.recv_timeout(Duration::from_secs(10)).map_err(err)?
 }
 
 #[cfg(target_os = "macos")]

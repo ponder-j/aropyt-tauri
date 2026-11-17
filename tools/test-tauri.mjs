@@ -24,7 +24,7 @@ await writeFile(path.join(work,'sized.svg'),'<svg xmlns="http://www.w3.org/2000/
 await mkdir(path.join(work,'nested'));await writeFile(path.join(work,'nested/child.md'),'Nested document');
 const executable=process.platform==='win32'?'aropyt.exe':'aropyt';
 const binary=process.env.AROPYT_TEST_BINARY||(flags.has('--packaged')?(process.platform==='darwin'?'src-tauri/target/release/bundle/macos/Aropyt.app/Contents/MacOS/aropyt':path.join(process.env.CARGO_TARGET_DIR||'src-tauri/target','release',executable)):path.join(process.env.CARGO_TARGET_DIR||'src-tauri/target','debug',executable));
-const child=spawn(path.isAbsolute(binary)?binary:path.join(root,binary),[source],{env:{...env,AROPYT_DATA_DIR:path.join(work,'profile'),AROPYT_TEST_PORT:String(port),AROPYT_TEST_TOKEN:token},stdio:['ignore','pipe','pipe']});
+const child=spawn(path.isAbsolute(binary)?binary:path.join(root,binary),[source,...(process.platform==='darwin'?['-ApplePersistenceIgnoreState','YES']:[])],{env:{...env,AROPYT_DATA_DIR:path.join(work,'profile'),AROPYT_TEST_PORT:String(port),AROPYT_TEST_TOKEN:token},stdio:['ignore','pipe','pipe']});
 let logs='';child.on('exit',(code,signal)=>{logs+='App exit: '+code+' '+signal+'\n';});child.stdout.on('data',s=>{logs+=s;});child.stderr.on('data',s=>{logs+=s;});
 let windowLabel;
 const call=async (payload,signal)=>{const response=await fetch('http://127.0.0.1:'+port,{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({window:windowLabel,...payload}),signal});const r=await response.json();if(!r.ok)throw Error(r.error);return r.value;};
@@ -69,6 +69,11 @@ try{
   if(result.error)throw Error(result.error);for(const check of result.checks)pass(check);
  }
  // Native filesystem/encoding/draft checks use the production dispatcher.
+ if(!flags.has('--spelling')&&!flags.has('--export')){
+  const shortcuts=await build({entryPoints:['tests/shortcuts.ts'],bundle:true,write:false,platform:'browser'});
+  await js(`(0,eval)(${JSON.stringify(shortcuts.outputFiles[0].text)})`);
+  for(const check of await js('window.runShortcutChecks()'))pass(check);
+ }
  const file=path.join(work,'saved.md');await invoke('fs.writeText',file,'中文\nHello\n','utf16le');assert.equal((await invoke('fs.readText',file,'utf16le')).content,'中文\nHello\n');
  await invoke('setting.put','trimTrailingWhitespace',true);await invoke('setting.put','insertFinalNewLineOnSave',true);await invoke('setting.put','lineEndings','crlf');await invoke('fs.writeText',file,'test  \n行','utf-8');assert.equal((await readFile(file)).toString(),'test\r\n行\r\n');
  await invoke('setting.put','trimTrailingWhitespace',false);await invoke('setting.put','insertFinalNewLineOnSave',false);await invoke('setting.put','lineEndings','lf');
@@ -90,9 +95,24 @@ try{
    assert(process.platform==='darwin'?entry.key.length>0:entry.keyValue>0,'Native shortcut column lost Backspace or a punctuation key: '+labels[0]);
   }
   if(process.platform==='darwin'){
-   assert.equal(focus.key,String.fromCharCode(0xf70b));assert.equal(typewriter.key,String.fromCharCode(0xf70c));
+   assert.equal(focus.key,'8');assert.equal(typewriter.key,'9');
+   for(const entry of [focus,typewriter]){assert(entry.modifiers & (1<<18));assert(entry.modifiers & (1<<17));assert(!(entry.modifiers & (1<<20)));}
+   for(const [action,key] of [['find','f'],['replace','h']]){
+    const entry=shown.find(item=>[action==='find'?'查找':'替换',action==='find'?'Find':'Replace'].includes(item.label));
+    assert.equal(entry?.key,key);assert(entry.modifiers & (1<<18),'Find/replace must use physical Control');assert(!(entry.modifiers & (1<<20)),'Find/replace captured Command');
+   }
    const redo=shown.find(item=>['重做','Redo'].includes(item.label));
    assert.equal(redo?.key,'z');assert(redo.modifiers & (1<<17),'macOS Redo did not use Command-Shift-Z');
+   for(const [labels,key,mask] of [
+    [['隐藏 Aropyt','Hide Aropyt'],'h',1<<20],
+    [['打印…','Print…'],'p',1<<20],
+    [['引用','Quote'],'q',(1<<18)|(1<<17)],
+    [['代码','Code'],'`',(1<<18)|(1<<17)],
+    [['文件树','File Tree'],'3',(1<<18)|(1<<17)],
+   ]){
+    const entry=shown.find(item=>labels.includes(item.label));assert.equal(entry?.key,key,'Native key '+labels[1]);
+    assert.equal(entry.modifiers & ((1<<17)|(1<<18)|(1<<19)|(1<<20)),mask,'Native modifiers '+labels[1]);
+   }
    assert(shown.filter(item=>item.displayOnly).length>20,'Display-only shortcut hints were not installed throughout the menu');
    assert(shown.filter(item=>item.displayOnly).every(item=>item.key.length>0),'An opened menu lost a native shortcut hint: '+JSON.stringify(shown.filter(item=>item.displayOnly&&!item.key.length)));
    const after=flatten(await call({op:'native-menu'}));
@@ -134,7 +154,9 @@ try{
   await mkdir('release/verification',{recursive:true});await writeFile('release/verification/export.pdf',pdf);await writeFile('release/verification/export.png',image);await writeFile('release/verification/export.html',html);pass('Native PDF/PNG exports use the complete static document with math, Mermaid, fonts and embedded images');
   const longHtml=html.replace('EXPORT_TAIL',Array.from({length:100},(_,i)=>'<p>Paragraph '+i+' LONG_DOCUMENT_CONTENT</p>').join('')+'<p>LONG_DOCUMENT_TAIL</p>');
   const longPdf=Buffer.from(await invoke('export.htmlToPDF',longHtml),'base64');await writeFile('release/verification/long-export.pdf',longPdf);assert(longPdf.length>pdf.length);pass('Native multipage PDF exports retain long document content');
-  const tab=await invoke('document.newTab');assert.equal(tab,true);assert((await call({op:'windows'})).filter(s=>s.startsWith('editor-')).length>=2);pass('Multiple native document windows and macOS tab creation');
+  const tab=await invoke('document.newTab');assert.equal(tab,true);assert((await call({op:'windows'})).filter(s=>s.startsWith('editor-')).length>=2);
+  if(process.platform==='darwin')await wait(async()=>(await call({op:'native-window'})).tabCount>=2);
+  pass('Multiple native document windows and explicit macOS tab creation');
  }
  if(!flags.has('--editor')&&!flags.has('--spelling')){
   await invoke('window.focus');
@@ -158,12 +180,16 @@ try{
   await wait(()=>js(`window.__aropyt.state.sourceMode===${!otherSource}`,otherWindow));
   await call({op:'menu-event',window:otherWindow,label:'Source Code Mode'});
   await wait(()=>js(`window.__aropyt.state.sourceMode===${otherSource}`,otherWindow));
+  const beforeRecentWindows=new Set(await call({op:'windows'}));
+  const otherBeforeRecent=await js(`({file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value,dirty:window.__aropyt.state.dirty})`,otherWindow);
   await call({op:'menu-event',window:otherWindow,label:path.basename(menuFile)});
-  await wait(()=>js(`window.__aropyt.state.file===${JSON.stringify(menuFile)}`,otherWindow));
-  assert.equal(await js('window.__aropyt.getEditor().value',otherWindow),'RECENT_MENU_TARGET');
+  const recentWindow=await wait(async()=>(await call({op:'windows'})).find(label=>label.startsWith('editor-')&&!beforeRecentWindows.has(label)));
+  await wait(()=>js(`window.__aropyt?.state.file===${JSON.stringify(menuFile)}`,recentWindow));
+  assert.equal(await js('window.__aropyt.getEditor().value',recentWindow),'RECENT_MENU_TARGET');
+  assert.deepEqual(await js(`({file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value,dirty:window.__aropyt.state.dirty})`,otherWindow),otherBeforeRecent);
   assert.deepEqual(await js(`({text:window.__aropyt.getEditor().value,source:window.__aropyt.state.sourceMode})`),mainBeforeMenu);
   await js(`window.JSBridge.invoke('setting.put','menuLanguage',${JSON.stringify(originalLanguage||'auto')})`);
-  pass('Native menu commands and recent-file paths stay correct across windows after dynamic menu entries change');
+  pass('Native menu commands remain correct and recent-file opens create another window without replacing existing documents');
   const startup=await build({entryPoints:['tests/startup-events.ts'],bundle:true,write:false,platform:'browser'});
   await js(`(0,eval)(${JSON.stringify(startup.outputFiles[0].text)})`);
   for(const check of await js('window.runStartupEventChecks()'))pass(check);
@@ -203,6 +229,41 @@ try{
   assert.deepEqual(await js('window.__aropyt.getEditor().view.state.selection.main.toJSON()'),backgroundSelection);
   assert.equal(await js('window.getSelection().isCollapsed'),false);
   pass('Background editor selection preserves foreground preference input selection and returns with native focus and the original range');
+  const openingDir=path.join(work,'independent-opens');await mkdir(openingDir);
+  const openingFiles=['sidebar target.md','quick target.md','drop one.md','drop two.md'].map(name=>path.join(openingDir,name));
+  for(const file of openingFiles)await writeFile(file,'# '+path.basename(file)+'\n\nINDEPENDENT_WINDOW_CONTENT');
+  await invoke('setting.put','autoSave',false);
+  await invoke('setting.put','actionWhenDropFile','open');
+  await js(`(()=>{const e=window.__aropyt.getEditor();e.setValue('ORIGINAL_UNSAVED_TEXT_MUST_REMAIN');e.view.dispatch({selection:{anchor:3,head:12}});return true})()`);
+  const originalOpenState=await js(`({file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value,dirty:window.__aropyt.state.dirty,selection:window.__aropyt.getEditor().view.state.selection.main.toJSON()})`);
+  const checkIndependentOpen=async(name,files,trigger)=>{
+   const before=new Set(await call({op:'windows'}));await trigger();
+   const labels=await wait(async()=>{const labels=(await call({op:'windows'})).filter(label=>label.startsWith('editor-')&&!before.has(label));return labels.length===files.length?labels:false;});
+   const docs=await wait(async()=>{const docs=await Promise.all(labels.map(label=>js(`window.__aropyt?{file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value}:null`,label)));return docs.every(Boolean)?docs:false;});
+   assert.deepEqual(docs.map(doc=>doc.file).sort(),[...files].sort());
+   for(const doc of docs)assert.equal(doc.text,await readFile(doc.file,'utf8'));
+   assert.deepEqual(await js(`({file:window.__aropyt.state.file,text:window.__aropyt.getEditor().value,dirty:window.__aropyt.state.dirty,selection:window.__aropyt.getEditor().view.state.selection.main.toJSON()})`),originalOpenState,name+' replaced the original document');
+   assert.equal(await js(`Boolean(document.querySelector('dialog[open]'))`),false,'Opening another document requested a save/discard decision');
+   if(process.platform==='darwin')for(const label of labels)assert((await call({op:'native-window',window:label})).tabCount<=1,name+' automatically joined a native tab group');
+   for(const label of labels)await call({op:'invoke',window:label,method:'app.onCloseWin',args:[]});
+   await wait(async()=>{const windows=await call({op:'windows'});return labels.every(label=>!windows.includes(label));});
+   pass(name+' opens independent windows while preserving the original unsaved document and selection');
+  };
+  await checkIndependentOpen('Native file-open commands',[openingFiles[0]],()=>invoke('app.openOrSwitch',openingFiles[0]));
+  await checkIndependentOpen('Queued renderer file-open events',[openingFiles[0]],()=>call({op:'send-event',event:{type:'open-file',arg:openingFiles[0]}}));
+  await js(`window.__aropyt.runAction('openFolder',${JSON.stringify(openingDir)})`);await js(`window.__aropyt.runAction('showCurrentFiles')`);
+  await wait(()=>js(`Array.from(document.querySelectorAll('#file-library-tree .file-library-file-node')).some(el=>el.dataset.path===${JSON.stringify(openingFiles[0])})`));
+  await checkIndependentOpen('Sidebar file clicks',[openingFiles[0]],()=>js(`Array.from(document.querySelectorAll('#file-library-tree .file-library-file-node')).find(el=>el.dataset.path===${JSON.stringify(openingFiles[0])}).click()`));
+  await js(`window.JSBridge.invoke('setting.updateRecentFile',${JSON.stringify(openingFiles[1])})`);
+  await js(`window.__aropyt.runAction('openQuickly')`);
+  await wait(()=>js(`Array.from(document.querySelectorAll('.aropyt-quick-open-item')).some(el=>el.dataset.path===${JSON.stringify(openingFiles[1])})`));
+  await checkIndependentOpen('Quick-open selections',[openingFiles[1]],()=>js(`Array.from(document.querySelectorAll('.aropyt-quick-open-item')).find(el=>el.dataset.path===${JSON.stringify(openingFiles[1])}).click()`));
+  await checkIndependentOpen('Multiple dropped Markdown files',openingFiles.slice(2),()=>js(`window.__aropyt.getEditor().view.dom.dispatchEvent(new CustomEvent('aropyt-drop',{detail:${JSON.stringify(openingFiles.slice(2))},bubbles:true,cancelable:true}))`));
+  const createdFile=path.join(openingDir,'new sidebar file.md');
+  await js(`document.getElementById('sidebar-new-file-btn').click()`);
+  await wait(()=>js(`Boolean(document.querySelector('#sidebar-new-file-row input'))`));
+  await checkIndependentOpen('New sidebar Markdown files',[createdFile],()=>js(`(()=>{const input=document.querySelector('#sidebar-new-file-row input');input.value='new sidebar file.md';input.form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));return true})()`));
+  await invoke('window.focus');
  }
  assert.deepEqual(await js('window.__testErrors'),[]);
  await writeFile('release/verification/test-results.json',JSON.stringify({date:new Date().toISOString(),platform:process.platform,arch:process.arch,passed},null,2));

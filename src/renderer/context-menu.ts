@@ -4,7 +4,7 @@ import { blockRanges, standaloneImage, documentReferences } from './md';
 import { codeFence } from './code-fences';
 import { tableSelection, focusTableRange } from './table-editor';
 import { IMAGE_ZOOM_LEVELS, replaceImageSource, ImageSourceRange } from './image-actions';
-import { shortcutHint } from '../shared/shortcuts';
+import { shortcutHint, defaultShortcut } from '../shared/shortcuts';
 
 interface Item {
   key: string; label?: string; group?: string; icon?: string; shortcut?: string;
@@ -104,7 +104,7 @@ export class EditorContextMenu {
     const text = (cn: string, en: string) => zh ? cn : en;
     const mod = 'Ctrl+', shift = 'Shift+';
     const cmd = (key: string, cn: string, en: string, shortcut = ''): Item => ({ key, label: text(cn, en),
-      shortcut: shortcutHint(settings.keyBinding?.[key] || shortcut), run: this.command(key) });
+      shortcut: shortcutHint(settings.keyBinding?.[key] || defaultShortcut(key, shortcut)), run: this.command(key) });
     const sep = (group?: string): Item => ({ key: 'divider', group });
     const clipboard = (key: string, cn: string, en: string, icon: string): Item => ({ key, label: text(cn, en), icon,
       run: key === 'del' ? this.command('del') : () => this.invoke('webContents.' + key) });
@@ -233,7 +233,7 @@ export class EditorContextMenu {
     if (table && cell) {
       const row = Number(cell.dataset.row), col = Number(cell.dataset.col);
       const rows = table.querySelectorAll('tr').length, cols = table.querySelectorAll('th').length;
-      const tableCommand = (key: string, cn: string, en: string, shortcut = '', disabled = false): Item => ({ key, label: text(cn, en), shortcut: shortcutHint(settings.keyBinding?.[key] || shortcut), disabled, run: () => {
+      const tableCommand = (key: string, cn: string, en: string, shortcut = '', disabled = false): Item => ({ key, label: text(cn, en), shortcut: shortcutHint(settings.keyBinding?.[key] || defaultShortcut(key, shortcut)), disabled, run: () => {
         if (key === 'copyTable') return this.invoke('clipboard.writeRich', this.editor.view.state.sliceDoc(Number(table.dataset.from), Number(table.dataset.to)), table.querySelector('table')?.outerHTML || '');
         if (document.activeElement !== cell) cell.focus({ preventScroll: true });
         return this.action(key);

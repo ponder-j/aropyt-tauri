@@ -329,9 +329,13 @@ function buildPanes(): Pane[] {
           { kind: 'note', text: 'Applied immediately — no restart needed.' },
         ] },
         { title: 'Registration / Activation', rows: [
-          { kind: 'note', text: 'Aropyt needs no activation. Windows checks GitHub for updates and installs only with your confirmation.' },
+          { kind: 'note', text: 'Aropyt needs no activation. Windows and macOS check GitHub for updates and install only with your confirmation.' },
           { kind: 'button', label: '', button: 'About Aropyt',
             action: () => invoke('window.about') },
+        ] },
+        { title: 'Updates', rows: [
+          { kind: 'text', key: 'updateProxy', label: 'Update proxy', placeholder: 'http://127.0.0.1:7890' },
+          { kind: 'hint', text: 'Leave empty to use system or environment proxy settings. Supports HTTP and HTTPS proxy URLs.' },
         ] },
         { title: 'Shortcut Keys', rows: [
           { kind: 'button', label: 'Key bindings are read from conf.user.json → keyBinding.',

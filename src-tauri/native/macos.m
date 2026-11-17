@@ -99,11 +99,23 @@ void aropyt_render(const char *html, const char *mode, double width, double heig
         [job.web loadHTMLString:body baseURL:nil];
     });
 }
+void aropyt_prepare_windows(void) {
+    NSWindow.allowsAutomaticWindowTabbing=NO;
+}
+size_t aropyt_window_tab_count(void *pointer) {
+    return ((__bridge NSWindow *)pointer).tabbedWindows.count;
+}
 void aropyt_window(void *pointer, const char *action, void *other) {
     NSWindow *win=(__bridge NSWindow *)pointer; NSString *op=[NSString stringWithUTF8String:action];
     dispatch_async(dispatch_get_main_queue(), ^{
-        win.tabbingIdentifier=@"aropyt-documents";win.tabbingMode=NSWindowTabbingModePreferred;
-        if ([op isEqualToString:@"attach"] && other) [win addTabbedWindow:(__bridge NSWindow *)other ordered:NSWindowAbove];
+        if ([op isEqualToString:@"setup"]) {
+            win.tabbingIdentifier=@"aropyt-documents";win.tabbingMode=NSWindowTabbingModeDisallowed;
+        }
+        else if ([op isEqualToString:@"attach"] && other) {
+            NSWindow *tab=(__bridge NSWindow *)other;
+            win.tabbingMode=NSWindowTabbingModePreferred;tab.tabbingMode=NSWindowTabbingModePreferred;
+            [win addTabbedWindow:tab ordered:NSWindowAbove];
+        }
         else if ([op isEqualToString:@"edited"]) win.documentEdited=YES;
         else if ([op isEqualToString:@"saved"]) win.documentEdited=NO;
         else if ([op isEqualToString:@"emoji"]) [NSApp orderFrontCharacterPalette:nil];

@@ -18,6 +18,8 @@ npm run package:linux
 
 对应命令只能在其目标系统上打包。输出目录为 `src-tauri/target/release/bundle/`。macOS 提供 APP / DMG，Windows 提供 NSIS，Linux 提供 DEB / AppImage。
 
+macOS 打包后还应运行 `npm run test:macos-launch`，或用 `node tools/test-macos-launch.mjs /Applications/Aropyt.app` 检查安装版。该测试通过 LaunchServices 打开应用，覆盖多文件冷启动、运行中打开文件、恢复上次文稿和普通启动，使用独立临时配置。直接运行可执行文件的 WebView 回归不会覆盖初始化前收到的 Apple Events。
+
 默认不携带词典。`resources/dictionaries.json` 是固定版本下载清单；独立维护工具 `npm run dictionaries:prepare` 生成的 `release/dictionaries/` 不参与默认打包。
 
 ## 自动化
@@ -80,3 +82,15 @@ ARM64 的独立 Release 使用 `linux-arm64-v<版本>` 标签，附件包含 DEB
 本地未配置发行证书时，macOS 为本地签名构建，没有 Apple 公证。正式分发应设置 Tauri 的 Apple 签名/公证环境变量；Windows 应配置代码签名。代码签名凭证只通过密钥存储或 CI Secrets 提供，不进入源码。
 
 具体本次验证范围记录在 [迁移核对](migration.md)。原 Electron 版本的历史检查不计为 Tauri 验证。
+
+## macOS 签名更新包
+
+`npm run release:mac` 原生构建 APP / DMG，以及 Tauri 签名的 `.app.tar.gz` 更新包。脚本递增 `src-tauri/updater-build.json` 中的秒级构建标识，构建标识同时嵌入可执行程序和 APP 资源；`latest-macos.json` 的 `pub_date` 使用同一日期，不能使用上传时的当前时间。版本号不变时，只有更晚的构建才会提示更新。下载及安装前还核对签名包内部构建标识与清单，拒绝通过修改日期重贴旧包标签。
+
+Mac 使用 `src-tauri/tauri.macos.conf.json` 中的独立公钥和 `latest-macos.json` 端点，不改 Windows 的 `latest.json`。私钥默认位于 `~/.tauri/aropyt-macos-updater.key`，也可通过 `TAURI_SIGNING_PRIVATE_KEY` 指定；私钥不提交或打入附件。首次设置后须保留同一签名密钥，公钥提交到平台配置。普通 `package:mac` 仍可构建不带更新附件的安装包；正式更新发布使用 `release:mac`。
+
+更新文件位于 `release/macos-updater/artifacts/`。上传 DMG、带构建标识的 `.app.tar.gz` 及 `.sig` 后，再上传 `latest-macos.json`；同步发布验证包与聚合 SHA-256，保留其他平台附件。先对从 DMG 取出的独立安装副本运行完整 WebView 与 LaunchServices 回归，再用 `tools/test-macos-updater.mjs <隔离安装的Aropyt.app> <签名tar.gz>` 运行下载、篡改拒绝、保存取消、多窗口保护、覆盖安装和真实重启回归；发布后加 `--online` 验证 GitHub 下载及正式更新检查。该脚本拒绝对 `/Applications` 安装版运行覆盖测试。
+
+Mac 更新会在保存完成后暂时禁用窗口输入，最终再次检查文稿是否未保存。安装完成后，独立的重启进程等待旧进程结束，再通过 LaunchServices 打开应用，防止单实例转发到正在退出的旧进程。已保存的文稿列表保存在用户数据目录中的一次性重启记录里，不改变用户的常规启动偏好。
+
+Mac 更新客户端启用原生系统代理发现；`updateProxy` 为空时使用系统/环境代理，偏好设置的显式 HTTP/HTTPS 代理会用于清单和更新包请求。线上更新测试会去除子进程中的所有代理环境变量，并通过临时偏好设置配置测试代理，覆盖从桌面启动时的联网条件。Mac 强制校验签名中绑定的版本。

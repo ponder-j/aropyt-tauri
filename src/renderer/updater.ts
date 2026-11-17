@@ -27,9 +27,9 @@ export class UpdateController {
       }
       const answer = await this.call('dialog.showMessageBox', {
         title: uiText('Aropyt 更新', 'Aropyt Update'),
-        message: uiText(`发现新版本 ${update.version}`, `Aropyt ${update.version} is available`),
-        detail: uiText(`当前版本：${update.currentVersion}。确认后将下载更新、保存所有文稿并退出，安装程序会自动覆盖安装并重新打开 Aropyt。`,
-          `Current version: ${update.currentVersion}. The update will download, save your documents and close Aropyt, then install over the current version and reopen the app.`) + (update.body ? '\n\n' + update.body : ''),
+        message: uiText(`发现更新 ${update.version}`, `An Aropyt ${update.version} update is available`),
+        detail: uiText(`当前版本：${update.currentVersion}。确认后将下载并验证更新、保存所有文稿、覆盖安装并重新打开 Aropyt。`,
+          `Current version: ${update.currentVersion}. The update will download and verify, save all your documents, install and reopen Aropyt.`) + (update.body ? '\n\n' + update.body : ''),
         buttons: [uiText('下载并安装', 'Download and install'), uiText('稍后', 'Later')], defaultId: 1, cancelId: 1,
       });
       if (answer.response !== 0) return;

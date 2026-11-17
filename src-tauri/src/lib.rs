@@ -8,6 +8,7 @@ use i18n::text as tr;
 mod menus;
 mod native;
 mod state;
+mod startup;
 mod testing;
 mod updates;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -92,6 +93,7 @@ fn eval_result(app: AppHandle, id: String, value: Value) {
     }
 }
 pub fn new_window(app: &AppHandle, file: Option<String>) -> Result<WebviewWindow> {
+    if updates::is_installing(app) { return Err(tr("正在安装更新，请稍后再打开文稿。", "An update is being installed. Please open the document after the app restarts.").into()); }
     let label = format!("editor-{}", uuid::Uuid::new_v4());
     let file = file.map(|f| files::abs(&f));
     let doc = Doc {
@@ -363,7 +365,7 @@ pub fn dispatch(
                 st.recent("recentFolders", path, true)?;
                 st.put("lastFolder", json!(path))?;
             } else {
-                send(win, json!({"type":"open-file","arg":path}));
+                new_window(app, Some(path.into()))?;
             }
             if method == "app.openFileOrFolder" {
                 Ok(if folder {
@@ -376,7 +378,7 @@ pub fn dispatch(
             }
         }
         "app.openOrSwitch" => {
-            send(win, json!({"type":"open-file","arg":files::abs(text(0))}));
+            new_window(app, Some(files::abs(text(0))))?;
             ok()
         }
         "app.sendEvent" => {
@@ -955,17 +957,11 @@ fn open_files(app: &AppHandle, files: Vec<String>) {
     if files.is_empty() {
         return;
     }
-    if let Some(win) = focused(app) {
-        send(&win, json!({"type":"open-file","arg":files[0]}));
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-        for file in files.into_iter().skip(1) {
-            let _ = new_window(app, Some(file));
-        }
-    } else {
-        for file in files {
-            let _ = new_window(app, Some(file));
-        }
+    if app.state::<startup::StartupFiles>().defer(&files) {
+        return;
+    }
+    for file in files {
+        let _ = new_window(app, Some(file));
     }
 }
 fn launch_files(argv: impl Iterator<Item = String>, cwd: &Path) -> Vec<String> {
@@ -986,6 +982,7 @@ fn launch_files(argv: impl Iterator<Item = String>, cwd: &Path) -> Vec<String> {
 }
 pub fn run() {
     let builder = tauri::Builder::default()
+        .manage(startup::StartupFiles::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init());
@@ -1009,10 +1006,17 @@ pub fn run() {
         })
         .setup(|app| {
             let _ = native::HOST.set(app.handle().clone());
+            native::prepare_windows();
             let state = AppState::new(app.handle()).map_err(std::io::Error::other)?;
             app.manage(state);
             app.manage(updates::Updates::default());
-            let initial = launch_files(std::env::args().skip(1), &std::env::current_dir()?);
+            let mut initial = app.state::<startup::StartupFiles>().take_pending();
+            for file in launch_files(std::env::args().skip(1), &std::env::current_dir()?) {
+                if !initial.contains(&file) {
+                    initial.push(file);
+                }
+            }
+            if let Some(files) = updates::reopen_after_update(app.handle()) { initial = files; }
             let settings = app.state::<AppState>().config();
             let restored: Vec<String> = if initial.is_empty() && settings["onLaunch"] == "both" {
                 settings["lastClosedFiles"]
@@ -1044,6 +1048,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Aropyt could not start");
     app.run(|app, event| match event {
+        RunEvent::Ready => {
+            // Events received while setup was creating webviews must initialize
+            // their own documents; emitting to an unready renderer loses them.
+            for file in app.state::<startup::StartupFiles>().finish() {
+                let already_open = app.state::<AppState>().docs.lock().unwrap()
+                    .values().any(|doc| doc.file.as_deref() == Some(file.as_str()));
+                if !already_open {
+                    let _ = new_window(app, Some(file));
+                }
+            }
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Opened { urls } => open_files(
             app,
@@ -1060,7 +1075,7 @@ pub fn run() {
             has_visible_windows,
             ..
         } => {
-            if !has_visible_windows {
+            if !has_visible_windows && !app.state::<startup::StartupFiles>().is_pending() {
                 let _ = new_window(app, None);
             }
         }

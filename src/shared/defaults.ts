@@ -1,5 +1,6 @@
 export const DEFAULTS = {
   theme: 'github',
+  updateProxy: '',
   useSeparateDarkTheme: false,
   darkTheme: 'night',
   themeShouldFollowSystem: true,

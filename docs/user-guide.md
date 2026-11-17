@@ -6,9 +6,11 @@
 
 ## 快速开始
 
+每次打开 Markdown 文件都会创建独立窗口，原窗口的文稿和未保存内容会保留。系统文件关联、文件菜单、最近文件、侧栏、快速打开和拖入后打开均遵循此规则；需要标签页时使用“新标签页”。
+
 打开 Markdown 文件，或新建文档后直接输入。代码块保持代码框，右下角可以修改语言，候选带有语言图标；Enter 确认并留在输入区，Tab 返回代码。点击 Mermaid 后，上方展开代码框，下方保留实时图形预览；光标离开后收起代码框。
 
-以下快捷键以 macOS 为例。保存：Command+S；源码模式：Command+/；查找：Command+F；替换：Command+H。Windows/Linux 的对应绑定使用 Ctrl。当前验证针对 macOS ARM 和 Linux ARM；最新结果与边界见[功能状态与 Typora 差异](typora-parity.md)。构建方式见[构建与发布](releasing.md)。
+以下快捷键以 macOS 为例。保存：Command+S；源码模式：Command+/；查找：Control+F；替换：Control+H（这里的 Control 为物理 Ctrl 键）。打印：Command+P；快速打开：Control+Shift+O；切换标签：Control+Tab。Command+H 保留为系统隐藏应用；Control+F/H 在编辑器内覆盖原生文字移动和退格。Windows/Linux 的查找、替换仍为 Ctrl+F/H。完整调整见[macOS 快捷键核对](keyboard-shortcuts.md)。当前验证针对 macOS ARM 和 Linux ARM；最新结果与边界见[功能状态与 Typora 差异](typora-parity.md)。构建方式见[构建与发布](releasing.md)。
 
 ## Markdown
 
@@ -24,7 +26,7 @@ Enter 创建新段落，Shift+Enter 在当前段落或列表项内换行。段�
 
 ## 表格
 
-输入 `| 表头一 | 表头二 |` 后按 Enter 可以创建表格并进入第一格。直接在单元格内编辑。光标进入加粗、斜体、代码或链接时，只展开该段的 Markdown 标记，相邻格式继续显示。点击单元格公式可编辑 TeX 并查看浮动预览，离开后恢复图形。Tab 移到下一格，在末格按 Tab 新增一行；Shift+Tab 返回上一格。Enter 移到下一行，Shift+Enter 在单元格内换行。Command+Enter 在当前行下方插行，Command+Shift+Backspace 删除当前行。表格上方工具栏提供对齐，左侧按钮打开尺寸网格；可输入行列数建立更大表格。右键菜单及段落菜单提供行列增删；右键“表格”子菜单还支持行列移动（Alt+方向键）、复制和整理；也可以粘贴电子表格中的多格内容。修改进入文档的统一撤销历史。
+输入 `| 表头一 | 表头二 |` 后按 Enter 可以创建表格并进入第一格。直接在单元格内编辑。光标进入加粗、斜体、代码或链接时，只展开该段的 Markdown 标记，相邻格式继续显示。点击单元格公式可编辑 TeX 并查看浮动预览，离开后恢复图形。Tab 移到下一格，在末格按 Tab 新增一行；Shift+Tab 返回上一格。Enter 移到下一行，Shift+Enter 在单元格内换行。Command+Enter 在当前行下方插行，Command+Shift+Backspace 删除当前行。表格上方工具栏提供对齐，左侧按钮打开尺寸网格；可输入行列数建立更大表格。右键菜单及段落菜单提供行列增删；右键“表格”子菜单还支持行列移动（macOS 为 Control+Command+方向键，Windows/Linux 为 Alt+方向键）、复制和整理；也可以粘贴电子表格中的多格内容。修改进入文档的统一撤销历史。
 
 ## 选择与删除
 
@@ -81,3 +83,11 @@ Word、OpenOffice、Epub、LaTeX 及其他文档格式使用 Pandoc。在偏好�
 ## 与 Typora 对照
 
 Aropyt 尚未与 Typora 完全一致。当前实现、已确认差异、尚未验证范围及验证命令统一维护在[功能状态与 Typora 差异](typora-parity.md)。隐私与联网行为见[隐私说明](privacy.md)，资源来源见[第三方组件](credits.md)。
+
+## 应用更新
+
+Windows 和 macOS 可在“帮助 → 检查更新”检查 GitHub 更新，正式安装版也会在启动后自动检查。确认后下载并验证签名，再保存所有窗口中的文稿；取消保存会中止安装。Mac 更新会覆盖应用并重新打开已保存的文稿。
+
+macOS 以版本号及构建日期判断更新，因此同为 1.0.1 的修订包也可被识别。首次从尚不支持应用内更新的旧 Mac 版升级，需要下载 DMG 覆盖安装一次。
+
+如果桌面启动后无法连接 GitHub，可在“偏好设置 → 通用 → 更新 → 更新代理”填写已有的 HTTP / HTTPS 代理地址。留空时跟随系统或环境代理；设置只影响 Aropyt 更新，不修改系统网络配置。

@@ -410,24 +410,35 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
 
   document.getElementById('sidebar-new-file-btn')!.click();
   await featureWait(() => !!document.getElementById('sidebar-new-file-row'));
-  const name = document.querySelector<HTMLInputElement>('#sidebar-new-file-row input')!;
+  let name = document.querySelector<HTMLInputElement>('#sidebar-new-file-row input')!;
   const nameRect = name.getBoundingClientRect(), scrollRect = document.getElementById('sidebar-content')!.getBoundingClientRect();
   featureAssert(nameRect.top >= scrollRect.top && nameRect.bottom <= document.getElementById('ty-sidebar-footer')!.getBoundingClientRect().top, 'Floating toolbar covered the inline file-name input');
   const submitName = (value: string) => { name.value = value; name.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); };
   submitName('../outside');
   featureAssert(document.querySelector('#sidebar-new-file-row [role="alert"]')!.textContent, 'New file allowed a path outside the current folder');
-  submitName('sidebar-cancelled');
-  await featureWait(() => !name.disabled);
-  featureAssert(!(await bridge.invoke('fs.exists', fixtureDir + 'sidebar-cancelled.md')) && editor.value === source, 'Cancelling the dirty-document prompt created a file or discarded the document');
+  name.value = 'sidebar-cancelled';
+  name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  featureAssert(!document.getElementById('sidebar-new-file-row') && !(await bridge.invoke('fs.exists', fixtureDir + 'sidebar-cancelled.md')) && editor.value === source, 'Cancelling inline creation created a file or discarded the document');
+  document.getElementById('sidebar-new-file-btn')!.click();
+  await featureWait(() => !!document.querySelector('#sidebar-new-file-row input'));
+  name = document.querySelector<HTMLInputElement>('#sidebar-new-file-row input')!;
   const previousInvoke = bridge.invoke;
+  const openedFiles: string[] = [];
+  const fileBeforeCreate = api.state.file, dirtyBeforeCreate = api.state.dirty;
   try {
-    bridge.invoke = async (method: string, ...args: unknown[]) => method === 'dialog.showMessageBox' ? { response: 1 } : previousInvoke(method, ...args);
+    bridge.invoke = async (method: string, ...args: unknown[]) => {
+      if (method === 'document.newWindow') { openedFiles.push(String(args[0])); return true; }
+      if (method === 'dialog.showMessageBox') throw new Error('Opening a new file must not ask to discard the current document');
+      return previousInvoke(method, ...args);
+    };
     submitName('sidebar-refreshed.md');
     await featureWait(() => !name.disabled);
     featureAssert(document.querySelector('#sidebar-new-file-row [role="alert"]')!.textContent && (await bridge.invoke('fs.readText', fixtureDir + 'sidebar-refreshed.md')).content.includes('Refresh summary'), 'New file overwrote an existing document');
     submitName('sidebar-created');
-    await featureWait(() => api.state.file?.replace(/\\/g, '/') === (fixtureDir + 'sidebar-created.md').replace(/\\/g, '/'));
-    featureAssert(editor.value === '' && (await bridge.invoke('fs.readText', api.state.file)).content === '', 'Inline new file did not open an empty Markdown file on disk');
+    await featureWait(() => openedFiles.some(file => file.replace(/\\/g, '/') === (fixtureDir + 'sidebar-created.md').replace(/\\/g, '/')));
+    featureAssert((await bridge.invoke('fs.readText', fixtureDir + 'sidebar-created.md')).content === '', 'Inline new file did not create an empty Markdown file on disk');
+    featureAssert(editor.value === source && api.state.file === fileBeforeCreate && api.state.dirty === dirtyBeforeCreate,
+      'Opening a created file in another window changed the original document or unsaved state');
     await featureWait(() => !document.getElementById('sidebar-new-file-row'));
     document.getElementById('sidebar-new-file-btn')!.click();
     await featureWait(() => !!document.querySelector('#sidebar-new-file-row input'));
@@ -435,6 +446,6 @@ const featureAssert = (ok: unknown, message: string) => { if (!ok) throw new Err
     featureAssert(!document.getElementById('sidebar-new-file-row') && document.activeElement?.id === 'sidebar-new-file-btn', 'Escape did not cancel inline file creation');
   } finally { bridge.invoke = previousInvoke; }
   api.state.file = originalFile; await bridge.invoke('document.activate', originalFile);
-  passed.push('Inline sidebar creation validates names, preserves cancelled edits, refuses overwrite, creates real Markdown and cancels with Escape');
+  passed.push('Inline sidebar creation validates names, refuses overwrite, opens new Markdown in another window and preserves unsaved edits');
   return passed;
 };

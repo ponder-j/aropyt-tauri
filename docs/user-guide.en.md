@@ -6,9 +6,11 @@ This guide describes the operations currently available. Supported behavior and 
 
 ## Getting Started
 
+Each Markdown file opens in a separate window, preserving the original document and unsaved edits. This applies to system file opens, the File menu, recent files, the sidebar, Quick Open and files dropped for opening. Use New Tab when you want a tab instead.
+
 Open a Markdown file, or create a document and start typing. Code blocks retain their code editor, with a language field in the lower-right corner and language icons in its suggestions. Enter confirms the language and keeps focus in the field; Tab returns to the code. Click a Mermaid diagram to expand its code above the live preview. The code collapses when the cursor leaves.
 
-The shortcuts below use macOS names. Save: Command+S; source mode: Command+/; find: Command+F; replace: Command+H. The corresponding Windows/Linux bindings use Ctrl. Current verification targets macOS ARM and Linux ARM; see [Feature Status and Typora Differences](typora-parity.md) for the latest results and limits. Build instructions are in [Building and Releasing](releasing.md).
+The shortcuts below use macOS names. Save: Command+S; source mode: Command+/; find: Control+F; replace: Control+H (the physical Ctrl key). Print: Command+P; quick open: Control+Shift+O; switch tabs: Control+Tab. Command+H retains system Hide. Control+F/H override native character movement and backward deletion inside the editor. Windows/Linux find and replace remain Ctrl+F/H. See the [macOS shortcut audit](keyboard-shortcuts.md) for the full changes. Current verification targets macOS ARM and Linux ARM; see [Feature Status and Typora Differences](typora-parity.md) for the latest results and limits. Build instructions are in [Building and Releasing](releasing.md).
 
 ## Markdown
 
@@ -24,7 +26,7 @@ Clicking a heading preserves its formatting. Backspace at the beginning of its t
 
 ## Tables
 
-Type `| Header One | Header Two |` and press Enter to create a table and enter the first cell. Edit directly in each cell. When the cursor enters bold, italic, code, or a link, only that span's Markdown markers expand; adjacent formatting remains rendered. Click math in a cell to edit its TeX with a floating preview; leaving it restores the rendered formula. Tab moves to the next cell and adds a row at the last cell. Shift+Tab moves back. Enter moves to the next row; Shift+Enter inserts a line break within the cell. Command+Enter inserts a row below the current row, and Command+Shift+Backspace deletes the current row. The toolbar above the table provides alignment controls; its left button opens a size grid. Enter row and column counts to create larger tables. The context and Paragraph menus provide row and column insertion and deletion. The context menu's Table submenu also offers row and column movement (Alt+arrow keys), copying, and formatting. You can paste multiple cells from a spreadsheet. Table changes are included in the document's shared undo history.
+Type `| Header One | Header Two |` and press Enter to create a table and enter the first cell. Edit directly in each cell. When the cursor enters bold, italic, code, or a link, only that span's Markdown markers expand; adjacent formatting remains rendered. Click math in a cell to edit its TeX with a floating preview; leaving it restores the rendered formula. Tab moves to the next cell and adds a row at the last cell. Shift+Tab moves back. Enter moves to the next row; Shift+Enter inserts a line break within the cell. Command+Enter inserts a row below the current row, and Command+Shift+Backspace deletes the current row. The toolbar above the table provides alignment controls; its left button opens a size grid. Enter row and column counts to create larger tables. The context and Paragraph menus provide row and column insertion and deletion. The context menu's Table submenu also offers row and column movement (Control+Command+arrow keys on macOS; Alt+arrow keys on Windows/Linux), copying, and formatting. You can paste multiple cells from a spreadsheet. Table changes are included in the document's shared undo history.
 
 ## Selection and Deletion
 
@@ -81,3 +83,11 @@ In Preferences → General → Language, choose Simplified Chinese, English, or 
 ## Comparison with Typora
 
 Aropyt is not yet identical to Typora. Current behavior, confirmed differences, unverified areas, and verification commands are maintained in [Feature Status and Typora Differences](typora-parity.md). See the [Privacy Notice](privacy.en.md) for privacy and network behavior, and [Third-Party Components](credits.en.md) for resource origins.
+
+## Application Updates
+
+Windows and macOS support Help → Check for Updates. Release builds also check GitHub after startup. After confirmation the app downloads and verifies the update, then saves documents in every window; cancelling a save aborts installation. Mac updates replace the app and reopen saved documents.
+
+macOS checks both the version and build date, so a revised 1.0.1 package can be detected. Older Mac builds without this feature need one manual DMG installation to enable in-app updates.
+
+If a desktop launch cannot reach GitHub, set an existing HTTP/HTTPS proxy under Preferences → General → Updates → Update proxy. Leaving it empty uses system or environment proxy settings. This affects Aropyt updates and does not change system network settings.

@@ -16,7 +16,7 @@ import { SpellcheckControl } from './spellcheck-control';
 import { EditorContextMenu } from './context-menu';
 import { SidebarControls, type FileSort } from './sidebar-controls';
 import { SidebarSearch } from './sidebar-search';
-import { shortcutCombo, normalizeShortcut } from '../shared/shortcuts';
+import { shortcutCombo, normalizeShortcut, defaultShortcut, primaryModifier, KEY_ACTIONS } from '../shared/shortcuts';
 import { UpdateController } from './updater';
 
 declare global {
@@ -568,22 +568,8 @@ function updateTitle(): void {
   document.title = title;
 }
 
-async function openFile(file: string, confirmed = false): Promise<void> {
-  if (!confirmed && !(await confirmSave(true))) return;
-  const res = await invoke<{ content: string; encoding: string } | null>('document.getContent', file);
-  if (!res) return;
-  await clearDraft();
-  state.file = file;
-  state.encoding = res.encoding || 'utf-8';
-  editor.setValue(res.content);
-  spellcheck?.reset();
-  setDirty(false);
-  await invoke('document.activate', file);
-  await invoke('setting.updateRecentFile', file);
-  updateTitle();
-  buildOutline();
-  refreshFileTree();
-  await invoke('app.sendEvent', 'doc.dirty', { dirty: false });
+async function openFile(file: string): Promise<void> {
+  await invoke('document.newWindow', file);
 }
 
 async function saveFile(saveAs = false): Promise<boolean> {
@@ -1309,26 +1295,6 @@ async function runFolderSearch(): Promise<void> {
 
 /* --------------------------------------------------------------- keymap */
 
-const KEY_ACTIONS: [string, string][] = [
-  ['Ctrl+1', 'heading:1'], ['Ctrl+2', 'heading:2'], ['Ctrl+3', 'heading:3'],
-  ['Ctrl+4', 'heading:4'], ['Ctrl+5', 'heading:5'], ['Ctrl+6', 'heading:6'], ['Ctrl+0', 'heading:0'],
-  ['Ctrl+b', 'strong'], ['Ctrl+i', 'emphasis'], ['Ctrl+u', 'underline'],
-  ['Ctrl+Shift+`', 'inlineCode'], ['Ctrl+Shift+h', 'highlight'], ['Ctrl+k', 'link'],
-  ['Ctrl+Shift+i', 'image'], ['Ctrl+\\', 'clearFormat'],
-  ['Ctrl+/', 'toggleSource'], ['Ctrl+Shift+l', 'toggleSidebar'],
-  ['Ctrl+f', 'find'], ['Ctrl+h', 'replace'], ['F3', 'findNext'], ['Shift+F3', 'findPrev'],
-  ['Ctrl+s', 'save'], ['Ctrl+Shift+s', 'saveAs'], ['Ctrl+n', 'new'], ['Ctrl+o', 'open'],
-  ['Ctrl+p', 'openQuickly'], ['Ctrl+Shift+k', 'insertFences'], ['Ctrl+Shift+m', 'insertMathBlock'],
-  ['Ctrl+Shift+q', 'insertQuote'], ['Ctrl+Shift+x', 'insertTaskList'], ['Ctrl+]', 'indent'], ['Ctrl+[', 'outdent'],
-  ['Ctrl+Enter', 'insertParagraphAfter'], ['Ctrl+Shift+Enter', 'insertParagraphBefore'],
-  ['Ctrl+Shift+d', 'deleteBlock'], ['F8', 'toggleFocus'], ['F9', 'toggleTypewriter'],
-  ['Ctrl+Alt+Shift+l', 'deleteLine'],
-  ['Ctrl+Shift+c', 'copyAsMarkdown'], ['Ctrl+Shift+v', 'pasteAsPlain'],
-  ['Ctrl+=', 'headingUp'], ['Ctrl+-', 'headingDown'],
-  ['Ctrl+Shift+[', 'insertOrderedList'], ['Ctrl+Shift+]', 'insertUnorderedList'],
-  ['Alt+Shift+5', 'strike'], ['Ctrl+Shift+t', 'insertTable'],
-];
-
 function comboOf(e: KeyboardEvent): string {
   return shortcutCombo(e);
 }
@@ -1339,19 +1305,24 @@ function installKeymap(): void {
     const combo = comboOf(e);
     const field = (e.target as HTMLElement)?.closest('input, textarea, select');
     if (field) {
-      const primary = /Mac/i.test(navigator.platform) ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+      // Find/replace can switch panels while their query field has focus.
+      const searchAction = KEY_ACTIONS.find(([binding, action]) => ['find', 'replace', 'findNext', 'findPrev'].includes(action)
+        && normalizeShortcut(settings.keyBinding?.[action] || defaultShortcut(action, binding)) === combo)?.[1];
+      if (searchAction && field.closest('#md-searchpanel')) { e.preventDefault(); void runAction(searchAction); return; }
+      const primary = primaryModifier(e);
       if (!primary || e.isComposing) return;
-      if (combo.toLowerCase() === 'ctrl+a' && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
+      if (combo === normalizeShortcut('Ctrl+A') && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) {
         e.preventDefault(); field.select();
       } else if (field.closest('#md-searchpanel, #sidebar-search-reveal')) {
-        const action = ({ 'ctrl+z': 'undo', 'ctrl+shift+z': 'redo', 'ctrl+y': 'redo' } as Record<string, string>)[combo.toLowerCase()];
+        const action = combo === normalizeShortcut('Ctrl+Z') ? 'undo'
+          : combo === normalizeShortcut(defaultShortcut('redo', 'Ctrl+Y')) || combo === normalizeShortcut('Ctrl+Shift+Z') ? 'redo' : undefined;
         if (action) { e.preventDefault(); void runAction(action); }
       }
       return;
     }
     const custom = Object.entries(settings.keyBinding || {}).find(([, binding]) =>
       normalizeShortcut(String(binding)) === combo.toLowerCase());
-    const direct = custom ? [String(custom[1]), custom[0]] : KEY_ACTIONS.find(([k, action]) => !settings.keyBinding?.[action] && normalizeShortcut(k) === combo.toLowerCase());
+    const direct = custom ? [String(custom[1]), custom[0]] : KEY_ACTIONS.find(([k, action]) => !settings.keyBinding?.[action] && normalizeShortcut(defaultShortcut(action, k)) === combo);
     if (direct) {
       e.preventDefault();
       void runAction(direct[1]);
@@ -1460,8 +1431,7 @@ async function boot(): Promise<void> {
       await invoke('setting.put', 'sidebarSort', by); await invoke('setting.put', 'sidebarSortDescending', descending); await refreshFileTree();
     },
     create: async path => {
-      if (!(await confirmSave(true))) return false;
-      await invoke('fs.createFile', path); await openFile(path, true); editor.focus(); return true;
+      await invoke('fs.createFile', path); await openFile(path); await refreshFileTree(); return true;
     },
     notify: message => notify(message, 'error'),
   });
@@ -1598,7 +1568,7 @@ function scheduleDerivedUpdate(): void {
 
 function wireUi(): void {
   editor.view.dom.addEventListener('wheel', (event) => {
-    if (settings.zoomByMouse && (event.ctrlKey || event.metaKey)) {
+    if (settings.zoomByMouse && primaryModifier(event)) {
       event.preventDefault(); zoom(event.deltaY < 0 ? 0.05 : -0.05);
     }
   }, { passive: false });
