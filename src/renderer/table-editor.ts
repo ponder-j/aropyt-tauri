@@ -10,6 +10,7 @@ import { textRange } from './editing-ranges';
 import { SearchHighlight, searchHighlights, searchText } from './search-highlights';
 import type { ImageSourceRange } from './image-actions';
 import { displayFileUrl } from '../bridge/files';
+import { defaultShortcut, normalizeShortcut, primaryModifier, shortcutCombo, TABLE_MOVE_KEYS } from '../shared/shortcuts';
 
 export interface MarkdownTable { rows: string[][]; align: ('left' | 'center' | 'right' | '')[]; newline: boolean }
 function cellRanges(line: string): { from: number; to: number }[] {
@@ -111,6 +112,7 @@ function replacesSource(cell: HTMLElement, event: InputEvent, view: EditorView):
   return targets.some(([from, to]) => protectedRanges.some(range => from === to ? from > range.from && from < range.to : from < range.to && to > range.from));
 }
 function select(cell: HTMLElement, from = 0, to = tableText(cell).length): void {
+  const focusChanged = cell.ownerDocument.activeElement !== cell;
   cell.focus(); const length = tableText(cell).length;
   if (!cell.firstChild) cell.append(document.createTextNode(''));
   const nodes = tableTextNodes(cell);
@@ -121,6 +123,7 @@ function select(cell: HTMLElement, from = 0, to = tableText(cell).length): void 
   };
   const range = document.createRange(); range.setStart(...point(from)); range.setEnd(...point(to));
   window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range);
+  if (focusChanged) cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 function mathTooltip(cell: HTMLElement, source: string, selection: [number, number] | null, view: EditorView): void {
   const root = cell.closest<HTMLElement>('.md-table-widget'); if (!root) return;
@@ -164,7 +167,7 @@ function renderCell(cell: HTMLElement, source: string, view: EditorView, active:
   cell.dataset.source = source;
 }
 interface Controller {
-  view: EditorView; root: HTMLElement; row: number; col: number; composing: boolean; writing: boolean;
+  view: EditorView; root: HTMLElement; scroll: HTMLElement; row: number; col: number; composing: boolean; writing: boolean;
   model(): MarkdownTable; commit(): void; mutate(action: string): void; focus(row: number, col: number): void;
   replace(text: string): void; resize(rows: number, columns: number): void;
 }
@@ -179,12 +182,17 @@ function syncFocus(controller: Controller): void {
 function cellAt(root: HTMLElement, row: number, col: number): HTMLElement | null { return root.querySelector(`[data-row="${row}"][data-col="${col}"]`); }
 function write(controller: Controller, model: MarkdownTable, row = controller.row, col = controller.col): void {
   const { root, view } = controller, from = Number(root.dataset.from), to = Number(root.dataset.to);
+  const scrollLeft = controller.scroll.scrollLeft;
   controller.writing = true;
   try { view.dispatch({ changes: { from, to, insert: serializeTable(model) }, selection: { anchor: from }, userEvent: 'input' }); }
   finally { controller.writing = false; }
   const focus = () => {
     const next = Array.from(view.dom.querySelectorAll<HTMLElement>('.md-table-widget')).find((element) => Number(element.dataset.from) === from);
-    if (next) controllers.get(next)?.focus(Math.min(row, model.rows.length - 1), Math.min(col, model.align.length - 1));
+    const replacement = next && controllers.get(next);
+    if (replacement) {
+      replacement.scroll.scrollLeft = scrollLeft;
+      replacement.focus(Math.min(row, model.rows.length - 1), Math.min(col, model.align.length - 1));
+    }
   };
   // A structure change replaces the widget; text edits keep its DOM and caret.
   if (!root.isConnected) queueMicrotask(focus);
@@ -203,11 +211,12 @@ export class TableWidget extends WidgetType {
     const root = document.createElement('div'); root.className = 'md-block-widget md-table-widget'; root.contentEditable = 'false';
     root.dataset.from = String(this.from); root.dataset.to = String(this.to); root.dataset.kind = 'table_open';
     root.dataset.revision = this.revision;
+    const scroll = document.createElement('div'); scroll.className = 'md-table-scroll';
     const toolbar = document.createElement('div'); toolbar.className = 'md-table-toolbar'; toolbar.setAttribute('role', 'toolbar');
     const menu = document.createElement('div'); menu.className = 'md-table-menu'; menu.hidden = true; menu.setAttribute('role', 'menu');
     const resize = document.createElement('div'); resize.className = 'md-table-resize'; resize.hidden = true; resize.setAttribute('role', 'dialog');
     const controller: Controller = {
-      root, view, row: 0, col: 0, composing: false, writing: false,
+      root, view, scroll, row: 0, col: 0, composing: false, writing: false,
       model: () => parseTable(view.state.sliceDoc(Number(root.dataset.from), Number(root.dataset.to)))!,
       focus(row, col) {
         this.row = row; this.col = col; const cell = cellAt(root, row, col); if (cell) select(cell);
@@ -330,6 +339,18 @@ export class TableWidget extends WidgetType {
     root.ownerDocument.addEventListener('selectionchange', selectionChanged);
     view.scrollDOM.addEventListener('scroll', selectionChanged); window.addEventListener('resize', selectionChanged);
     cleanup.set(root, () => { root.ownerDocument.removeEventListener('mousedown', outside, true); root.ownerDocument.removeEventListener('selectionchange', selectionChanged); view.scrollDOM.removeEventListener('scroll', selectionChanged); window.removeEventListener('resize', selectionChanged); });
+    scroll.addEventListener('scroll', () => {
+      if (root.querySelector('.md-table-math-tooltip')) selectionChanged();
+    });
+    // Some mouse drivers still send a vertical wheel delta with Shift held.
+    // Leave native horizontal gestures and ordinary vertical scrolling alone.
+    scroll.addEventListener('wheel', event => {
+      if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.deltaX || !event.deltaY || scroll.scrollWidth <= scroll.clientWidth) return;
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? parseFloat(getComputedStyle(scroll).lineHeight)
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? scroll.clientWidth : 1;
+      scroll.scrollLeft += event.deltaY * (unit || 1);
+    }, { passive: false });
     const grid = document.createElement('table'); const head = document.createElement('thead'), body = document.createElement('tbody'); grid.append(head, body);
     table.rows.forEach((row, r) => {
       const tr = document.createElement('tr'); (r ? body : head).append(tr);
@@ -367,7 +388,7 @@ export class TableWidget extends WidgetType {
           });
           menu.hidden = true;
         });
-        cell.addEventListener('click', (event) => { const link = (event.target as HTMLElement).closest<HTMLElement>('[data-href]'); if (link && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void window.JSBridge?.invoke('shell.openExternal', link.dataset.href); } });
+        cell.addEventListener('click', (event) => { const link = (event.target as HTMLElement).closest<HTMLElement>('[data-href]'); if (link && primaryModifier(event)) { event.preventDefault(); void window.JSBridge?.invoke('shell.openExternal', link.dataset.href); } });
         cell.addEventListener('compositionstart', () => { controller.composing = true; });
         cell.addEventListener('compositionend', () => { controller.composing = false; controller.commit(); });
         cell.addEventListener('beforeinput', event => {
@@ -405,17 +426,19 @@ export class TableWidget extends WidgetType {
               return;
             }
           }
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.stopPropagation(); tableAction(view, event.shiftKey ? 'redo' : 'undo'); return; }
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') { event.preventDefault(); event.stopPropagation(); select(cell); return; }
-          if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === 'Backspace' || event.altKey && event.key.toLowerCase() === 'l')) {
+          const primary = primaryModifier(event);
+          if (primary && !event.altKey && event.key.toLowerCase() === 'z') { event.preventDefault(); event.stopPropagation(); tableAction(view, event.shiftKey ? 'redo' : 'undo'); return; }
+          if (primary && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'a') { event.preventDefault(); event.stopPropagation(); select(cell); return; }
+          if (primary && event.shiftKey && (event.key === 'Backspace' || event.altKey && event.key.toLowerCase() === 'l')) {
             event.preventDefault(); event.stopPropagation(); controller.commit(); controller.mutate('deleteRow'); return;
           }
-          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          if (primary && !event.altKey && event.key === 'Enter') {
             event.preventDefault(); event.stopPropagation(); controller.commit(); controller.mutate(event.shiftKey ? 'rowBefore' : 'rowAfter'); return;
           }
-          if (event.altKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+          const move = TABLE_MOVE_KEYS.find(([key]) => event.key === key);
+          if (move && shortcutCombo(event) === normalizeShortcut(defaultShortcut('table' + move[1][0].toUpperCase() + move[1].slice(1), 'Alt+' + move[0]))) {
             event.preventDefault(); event.stopPropagation(); controller.commit();
-            controller.mutate(({ ArrowUp: 'rowUp', ArrowDown: 'rowDown', ArrowLeft: 'columnLeft', ArrowRight: 'columnRight' } as Record<string, string>)[event.key]); return;
+            controller.mutate(move[1]); return;
           }
           if (event.key === 'Escape') { event.preventDefault(); menu.hidden = true; resize.hidden = true; cell.blur(); view.focus(); return; }
           if (event.key !== 'Tab' && event.key !== 'Enter') return;
@@ -435,7 +458,7 @@ export class TableWidget extends WidgetType {
         });
       });
     });
-    root.append(grid); localizeTable(root); return root;
+    scroll.append(grid); root.append(scroll); localizeTable(root); return root;
   }
   override updateDOM(root: HTMLElement, view: EditorView): boolean {
     const model = parseTable(this.source); if (!model) return false;
@@ -563,9 +586,12 @@ export function tableAction(view: EditorView, action: string): boolean {
   }
   if (action === 'undo' || action === 'redo') {
     const from = Number(root.dataset.from), row = Number(cell!.dataset.row), col = Number(cell!.dataset.col), [start, end] = offsets(cell!);
+    const scrollLeft = controller.scroll.scrollLeft;
     (action === 'undo' ? undo : redo)(view);
     queueMicrotask(() => {
       const next = Array.from(view.dom.querySelectorAll<HTMLElement>('.md-table-widget')).find((node) => Number(node.dataset.from) === from);
+      const replacement = next && controllers.get(next);
+      if (replacement && next !== root) replacement.scroll.scrollLeft = scrollLeft;
       const target = next && cellAt(next, row, col); if (target) select(target, start, end);
     }); return true;
   }

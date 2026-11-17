@@ -9,6 +9,7 @@ import {
   keymap, rectangularSelection, showTooltip,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, indentLess, isolateHistory } from '@codemirror/commands';
+import { primaryModifier } from '../shared/shortcuts';
 import hljs from 'highlight.js';
 import { renderDocument, BlockRange, Heading, dialect, escapeHtml, standaloneImage, StandaloneImage, documentReferences } from './md';
 import { codeFence, CodeFence } from './code-fences';
@@ -1115,7 +1116,9 @@ export class DocEditor {
         fenceKeymap,
         pairInput,
         keymap.of([
-          ...defaultKeymap.filter((b) => !['Mod-z', 'Mod-y', 'Mod-Shift-z'].includes(b.key ?? '')),
+          ...defaultKeymap.filter((b) => !['Mod-z', 'Mod-y', 'Mod-Shift-z'].includes(b.key ?? '')
+            && !(/Mac/i.test(navigator.platform) && (/^(Ctrl-Arrow|Ctrl-l$|Ctrl-A$|Ctrl-Alt-h$|Shift-Alt-m$)/.test(b.mac ?? '')
+              || /^(Shift-)?Alt-Arrow(Up|Down)$/.test(b.key ?? '')))),
           ...historyKeymap,
           indentWithTab,
         ]),
@@ -1226,7 +1229,7 @@ export class DocEditor {
       event.preventDefault(); view.dispatch({ selection: { anchor: from + Number(image.dataset.selectionFrom), head: from + Number(image.dataset.selectionTo) }, scrollIntoView: true }); view.focus(); return true;
     }
     const inlineLink = target?.closest<HTMLElement>('[data-href]');
-    if (inlineLink && (event.metaKey || event.ctrlKey)) {
+    if (inlineLink && primaryModifier(event)) {
       event.preventDefault(); void window.JSBridge?.invoke('shell.openExternal', inlineLink.dataset.href); return true;
     }
     const widget = target?.closest('.md-block-widget') as HTMLElement | null;

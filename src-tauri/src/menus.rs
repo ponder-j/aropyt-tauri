@@ -30,7 +30,7 @@ fn registered(entry: &Value) -> bool {
     entry["registerAccelerator"] != false
         && !matches!(
             entry["accelerator"].as_str(),
-            Some("Ctrl+A" | "CommandOrControl+A")
+            Some("Ctrl+A" | "CommandOrControl+A" | "Command+A")
         )
 }
 

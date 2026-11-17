@@ -96,6 +96,8 @@ export const PREFERENCE_TRANSLATIONS: Record<string, string> = {
   'Install a theme by copying its CSS and assets into the theme folder.': '将主题的 CSS 和资源文件复制到主题文件夹即可安装。',
   'Language': '语言', 'Applied immediately — no restart needed.': '立即生效，无需重启。',
   'Registration / Activation': '注册 / 激活',
+  'Updates': '更新', 'Update proxy': '更新代理',
+  'Leave empty to use system or environment proxy settings. Supports HTTP and HTTPS proxy URLs.': '留空时使用系统或环境代理。支持 HTTP 和 HTTPS 代理地址。',
   'Aropyt needs no activation. Windows checks GitHub for updates and installs only with your confirmation.': 'Aropyt 无需激活。Windows 版会检查 GitHub 更新，仅在您确认后安装。',
   'About Aropyt': '关于 Aropyt', 'Shortcut Keys': '快捷键',
   'Key bindings are read from conf.user.json → keyBinding.': '快捷键从 conf.user.json → keyBinding 读取。',

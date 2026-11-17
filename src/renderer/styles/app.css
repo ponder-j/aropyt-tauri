@@ -1187,6 +1187,7 @@ html.theme-dark .hljs-comment { color:#888; }
 .outline-toggle { border:0; background:transparent; color:inherit; cursor:pointer; padding:0 5px 0 0; }
 .outline-item[hidden] { display:none; }
 .md-table-widget { position:relative; padding-top:4px; }
+.md-table-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
 .md-table-widget table { width:100%; margin-top:0; margin-bottom:0; }
 .md-table-widget td, .md-table-widget th { min-width:60px; white-space:pre-wrap; outline:none; cursor:text; }
 .md-table-toolbar { position:absolute; top:-12px; left:0; right:0; height:14px; display:flex; align-items:center; gap:2px; visibility:hidden; font-size:12px; }

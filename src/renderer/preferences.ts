@@ -333,6 +333,10 @@ function buildPanes(): Pane[] {
           { kind: 'button', label: '', button: 'About Aropyt',
             action: () => invoke('window.about') },
         ] },
+        ...(/Win/i.test(navigator.platform) ? [{ title: 'Updates', rows: [
+          { kind: 'text' as const, key: 'updateProxy', label: 'Update proxy', placeholder: 'http://127.0.0.1:7890' },
+          { kind: 'hint' as const, text: 'Leave empty to use system or environment proxy settings. Supports HTTP and HTTPS proxy URLs.' },
+        ] }] : []),
         { title: 'Shortcut Keys', rows: [
           { kind: 'button', label: 'Key bindings are read from conf.user.json → keyBinding.',
             button: 'Open Config Folder', action: () => invoke('setting.openConfFolder') },

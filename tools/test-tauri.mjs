@@ -68,6 +68,11 @@ try{
   const result=await wait(()=>js('window.__dialogChecks||null'));
   if(result.error)throw Error(result.error);for(const check of result.checks)pass(check);
  }
+ if(process.platform==='darwin'&&!flags.has('--spelling')&&!flags.has('--export')){
+  const shortcuts=await build({entryPoints:['tests/shortcuts.ts'],bundle:true,write:false,platform:'browser'});
+  await js(`(0,eval)(${JSON.stringify(shortcuts.outputFiles[0].text)})`);
+  for(const check of await js('window.runShortcutChecks()'))pass(check);
+ }
  // Native filesystem/encoding/draft checks use the production dispatcher.
  const file=path.join(work,'saved.md');await invoke('fs.writeText',file,'中文\nHello\n','utf16le');assert.equal((await invoke('fs.readText',file,'utf16le')).content,'中文\nHello\n');
  await invoke('setting.put','trimTrailingWhitespace',true);await invoke('setting.put','insertFinalNewLineOnSave',true);await invoke('setting.put','lineEndings','crlf');await invoke('fs.writeText',file,'test  \n行','utf-8');assert.equal((await readFile(file)).toString(),'test\r\n行\r\n');
@@ -75,6 +80,11 @@ try{
  const id=await invoke('document.saveDraft',source,'RECOVERY','utf-8');assert.equal((await invoke('document.getDraft',id)).content,'RECOVERY');await invoke('document.removeDraft',id);pass('Native encodings, save preferences and atomic recovery drafts round-trip');
  assert((await js('window.JSBridge.invoke("menu.dump")')).lines.length>180);pass('Complete original native menu structure is installed');
  if(process.platform==='win32') {
+  await invoke('setting.put','updateProxy','file:///invalid-proxy');
+  try {
+   await assert.rejects(invoke('update.check'), /Invalid update proxy|更新代理地址无效/);
+  } finally { await invoke('setting.put','updateProxy',''); }
+  pass('Windows updater validates the configured proxy URL before making a request');
   const output=await build({entryPoints:['tests/windows-menu.ts'],bundle:true,write:false,platform:'browser'});
   await js(`(0,eval)(${JSON.stringify(output.outputFiles[0].text)})`);
   for(const check of await js('window.runWindowsMenuChecks()'))pass(check);
@@ -90,7 +100,12 @@ try{
    assert(process.platform==='darwin'?entry.key.length>0:entry.keyValue>0,'Native shortcut column lost Backspace or a punctuation key: '+labels[0]);
   }
   if(process.platform==='darwin'){
-   assert.equal(focus.key,String.fromCharCode(0xf70b));assert.equal(typewriter.key,String.fromCharCode(0xf70c));
+   assert.equal(focus.key,'8');assert.equal(typewriter.key,'9');
+   for(const entry of [focus,typewriter]){assert(entry.modifiers & (1<<18));assert(entry.modifiers & (1<<17));assert(!(entry.modifiers & (1<<20)));}
+   for(const [labels,key] of [[['查找','Find'],'f'],[['替换','Replace'],'h']]){
+    const entry=shown.find(item=>labels.includes(item.label));
+    assert.equal(entry?.key,key);assert(entry.modifiers & (1<<18),'Find/replace must use physical Control');assert(!(entry.modifiers & (1<<20)),'Find/replace captured Command');
+   }
    const redo=shown.find(item=>['重做','Redo'].includes(item.label));
    assert.equal(redo?.key,'z');assert(redo.modifiers & (1<<17),'macOS Redo did not use Command-Shift-Z');
    assert(shown.filter(item=>item.displayOnly).length>20,'Display-only shortcut hints were not installed throughout the menu');

@@ -68,7 +68,7 @@ static void installHints(NSMenu *menu, NSArray *entries) {
         // These predefined items already use the Cocoa responder chain.
         if ([@[@"cut",@"copy",@"paste",@"services"] containsObject:entry[@"role"] ?: @""]) continue;
         BOOL displayOnly=[entry[@"registerAccelerator"] isEqual:@NO] ||
-            [@[@"Ctrl+A",@"CommandOrControl+A"] containsObject:accelerator];
+            [@[@"Ctrl+A",@"CommandOrControl+A",@"Command+A"] containsObject:accelerator];
         if (!displayOnly) continue;
         // AppKit can clear a conflicting equivalent while a menu is installed.
         // Recover its display hint from the immutable template in that case.

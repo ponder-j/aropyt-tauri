@@ -315,6 +315,7 @@ export const ACCEL = {
  * selection. Electron still displays them but must not register them.
  */
 export const RENDERER_KEYS: Set<string> = new Set<string>([
+  'Ctrl+A', 'Ctrl+F', 'Ctrl+H',
   'Ctrl+Enter', 'Ctrl+Shift+Backspace', 'Ctrl+Alt+Shift+L',
   ACCEL.undo, ACCEL.redo, 'Ctrl+Shift+Z', ACCEL.cut, ACCEL.copy, ACCEL.paste,
   ACCEL.copyMarkdown, ACCEL.pastePlain,

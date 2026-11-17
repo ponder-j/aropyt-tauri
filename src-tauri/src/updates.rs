@@ -10,6 +10,23 @@ pub struct Updates {
     pending: Mutex<Option<(String, Update, Option<Vec<u8>>)>>,
 }
 
+fn builder(app: &AppHandle) -> Result<tauri_plugin_updater::UpdaterBuilder> {
+    let builder = app.updater_builder().timeout(Duration::from_secs(20));
+    let settings = app.state::<AppState>().config();
+    let proxy = settings["updateProxy"].as_str().unwrap_or("").trim();
+    if proxy.is_empty() {
+        return Ok(builder);
+    }
+    let proxy = url::Url::parse(proxy)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        .ok_or(tr(
+            "更新代理地址无效，请在偏好设置中填写 HTTP 或 HTTPS 代理地址。",
+            "Invalid update proxy. Enter an HTTP or HTTPS proxy URL in Preferences.",
+        ))?;
+    Ok(builder.proxy(proxy))
+}
+
 // Runs on the bridge's blocking worker; no UI thread or document lock is held
 // while querying GitHub, downloading, or waiting for a save dialog.
 pub fn dispatch(app: &AppHandle, win: &WebviewWindow, method: &str) -> Result<Value> {
@@ -31,8 +48,8 @@ pub fn dispatch(app: &AppHandle, win: &WebviewWindow, method: &str) -> Result<Va
         "update.check" => {
             *pending = None;
             let install_dir = std::env::current_exe().map_err(err)?.parent().ok_or("Missing executable directory")?.to_path_buf();
-            let updater = app.updater_builder().installer_arg(format!("/D={}", install_dir.display()))
-                .timeout(Duration::from_secs(20)).build().map_err(err)?;
+            let updater = builder(app)?.installer_arg(format!("/D={}", install_dir.display()))
+                .build().map_err(err)?;
             let update = tauri::async_runtime::block_on(updater.check()).map_err(err)?;
             let info = update.as_ref().map(|u| json!({"version":u.version,"currentVersion":u.current_version,"body":u.body}));
             *pending = update.map(|u| (win.label().to_string(), u, None));
@@ -75,7 +92,7 @@ pub fn dispatch(app: &AppHandle, win: &WebviewWindow, method: &str) -> Result<Va
 // a same-version reinstall. Signature verification is the real plugin verifier.
 pub fn test_fixture(app: &AppHandle, win: &WebviewWindow, manifest: Value, file: &str, stage: bool) -> Result<Value> {
     if !crate::testing::isolated() { return Err("Update fixture requires an isolated test profile".into()); }
-    let builder = app.updater_builder().installer_args(["/NS".to_string(), format!("/D={}", std::env::current_exe().map_err(err)?.parent().ok_or("Missing executable directory")?.display())]);
+    let builder = builder(app)?.installer_args(["/NS".to_string(), format!("/D={}", std::env::current_exe().map_err(err)?.parent().ok_or("Missing executable directory")?.display())]);
     // Permit a same-version reinstall only in this isolated test entry point.
     // Keep the signed version unchanged: updater signatures bind the version.
     let builder = if stage { builder.version_comparator(|_, _| true) } else { builder };
