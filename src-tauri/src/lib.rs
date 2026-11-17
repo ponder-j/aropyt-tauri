@@ -980,6 +980,43 @@ fn launch_files(argv: impl Iterator<Item = String>, cwd: &Path) -> Vec<String> {
         })
         .collect()
 }
+fn open_startup_windows(app: &AppHandle) -> Result<()> {
+    let Some(initial) = app.state::<startup::StartupFiles>().finish() else {
+        return Ok(());
+    };
+    let settings = app.state::<AppState>().config();
+    let files = if initial.is_empty() && settings["onLaunch"] == "both" {
+        settings["lastClosedFiles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|file| Path::new(file).is_file())
+            .take(12)
+            .map(String::from)
+            .collect()
+    } else {
+        initial
+    };
+    if files.is_empty() {
+        new_window(app, None)?;
+    } else {
+        for file in files {
+            new_window(app, Some(file))?;
+        }
+    }
+    eprintln!("[aropyt] windows created");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn finish_macos_startup(app: &AppHandle) {
+    if let Err(error) = open_startup_windows(app) {
+        eprintln!("[aropyt] could not open startup windows: {error}");
+        app.exit(1);
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(startup::StartupFiles::default())
@@ -1010,54 +1047,38 @@ pub fn run() {
             let state = AppState::new(app.handle()).map_err(std::io::Error::other)?;
             app.manage(state);
             app.manage(updates::Updates::default());
-            let mut initial = app.state::<startup::StartupFiles>().take_pending();
-            for file in launch_files(std::env::args().skip(1), &std::env::current_dir()?) {
-                if !initial.contains(&file) {
-                    initial.push(file);
-                }
-            }
-            if let Some(files) = updates::reopen_after_update(app.handle()) { initial = files; }
-            let settings = app.state::<AppState>().config();
-            let restored: Vec<String> = if initial.is_empty() && settings["onLaunch"] == "both" {
-                settings["lastClosedFiles"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|v| {
-                        v.as_str()
-                            .filter(|p| Path::new(p).is_file())
-                            .map(String::from)
-                    })
-                    .take(12)
-                    .collect()
+            let startup = app.state::<startup::StartupFiles>();
+            if let Some(files) = updates::reopen_after_update(app.handle()) {
+                drop(startup.take_pending());
+                startup.defer(&files);
             } else {
-                initial
-            };
-            if restored.is_empty() {
-                new_window(app.handle(), None).map_err(std::io::Error::other)?;
-            } else {
-                for file in restored {
-                    new_window(app.handle(), Some(file)).map_err(std::io::Error::other)?;
-                }
+                startup.defer(&launch_files(
+                    std::env::args().skip(1),
+                    &std::env::current_dir()?,
+                ));
             }
-            eprintln!("[aropyt] windows created");
+            #[cfg(not(target_os = "macos"))]
+            open_startup_windows(app.handle()).map_err(std::io::Error::other)?;
             testing::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("Aropyt could not start");
     app.run(|app, event| match event {
-        RunEvent::Ready => {
-            // Events received while setup was creating webviews must initialize
-            // their own documents; emitting to an unready renderer loses them.
-            for file in app.state::<startup::StartupFiles>().finish() {
-                let already_open = app.state::<AppState>().docs.lock().unwrap()
-                    .values().any(|doc| doc.file.as_deref() == Some(file.as_str()));
-                if !already_open {
-                    let _ = new_window(app, Some(file));
-                }
-            }
+        #[cfg(target_os = "macos")]
+        RunEvent::Ready if !app.state::<startup::StartupFiles>().has_files() => {
+            // LaunchServices can deliver the cold Opened event after Ready.
+            // Give it a chance to arrive before restoring files or creating an empty window.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || finish_macos_startup(&handle));
+            });
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::MainEventsCleared if app.state::<startup::StartupFiles>().has_files() => {
+            finish_macos_startup(app);
         }
         #[cfg(target_os = "macos")]
         RunEvent::Opened { urls } => open_files(

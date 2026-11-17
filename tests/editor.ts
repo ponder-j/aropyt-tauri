@@ -1271,12 +1271,13 @@ function cellSelection(cell: HTMLElement, from: number, to = from): void {
     parent.querySelector<HTMLButtonElement>('.md-table-menu [data-action="deleteColumn"]')!.click(); await frame();
     assert(parent.querySelectorAll('th').length === 2 && editor.value.includes('Before') && editor.value.includes('After'), 'Delete column damaged table or neighbouring blocks');
   });
-  await test('Table Command Enter inserts a row and Command Shift Backspace removes it with undo', async () => {
+  await test('The platform table shortcuts insert and delete rows with undo', async () => {
     editor.setValue('Before\n\n| A | B |\n| --- | --- |\n| Apple | 2 |\n| Banana | 3 |\n\nAfter'); cursor(0); await frame();
     const cell = (r: number) => parent.querySelector<HTMLElement>(`[data-row="${r}"][data-col="0"]`)!;
-    cell(1).focus(); cell(1).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true })); await frame();
-    assert(editor.value.includes('| Apple | 2 |\n|  |  |\n| Banana | 3 |') && document.activeElement === cell(2), 'Command Enter moved instead of inserting a row');
-    cell(2).dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', metaKey: true, shiftKey: true, bubbles: true, cancelable: true })); await frame();
+    const primary = /Mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    cell(1).focus(); cell(1).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ...primary, bubbles: true, cancelable: true })); await frame();
+    assert(editor.value.includes('| Apple | 2 |\n|  |  |\n| Banana | 3 |') && document.activeElement === cell(2), 'The insert-row shortcut moved instead of inserting a row');
+    cell(2).dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', ...primary, shiftKey: true, bubbles: true, cancelable: true })); await frame();
     assert(editor.value.includes('| Apple | 2 |\n| Banana | 3 |') && document.activeElement === cell(2), 'Delete-row shortcut damaged the table or lost focus');
     undo(view); await frame(); assert(parent.querySelectorAll('tbody tr').length === 3, 'Delete row cannot undo');
   });

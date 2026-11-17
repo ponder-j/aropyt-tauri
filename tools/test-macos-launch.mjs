@@ -81,7 +81,7 @@ async function checkLaunch(name, files, preferences, check) {
   try {
     const documents = await wait(async () => {
       const result = await snapshot();
-      return result.length && result.every(Boolean) ? result : false;
+      return result.length >= Math.max(1, files.length) && result.every(Boolean) ? result : false;
     });
     ready = true;
     await check({ documents, call, snapshot, wait });
@@ -114,7 +114,7 @@ async function checkLaunch(name, files, preferences, check) {
 await checkLaunch('cold-open-multiple-files', [first, second], {
   onLaunch: 'both', lastClosedFiles: [restored],
 }, async ({ documents, call, snapshot, wait }) => {
-  assert.equal(documents.length, 2, 'Explicit file opens must not create an empty or restored extra window');
+  assert.equal(documents.length, 2, 'Unexpected cold-start windows: ' + JSON.stringify(documents.map(doc => doc.file)));
   assert.deepEqual(documents.map(doc => doc.file).sort(), [first, second].sort());
   for (const doc of documents) assert.equal(doc.content, fixtures.get(doc.file));
   for (const doc of documents) assert((await call({ op: 'native-window', window: doc.window })).tabCount <= 1,

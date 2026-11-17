@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
-// macOS can deliver Opened/Reopen before Tauri's setup hook. This state is
-// registered on the Builder, before AppState or any editor window exists.
+// Collect launch requests from before setup until the first windows are chosen.
+// Once consumed, ordinary open events each create their own window.
 pub struct StartupFiles(Mutex<Option<Vec<String>>>);
 
 impl Default for StartupFiles {
@@ -28,10 +28,20 @@ impl StartupFiles {
         self.0.lock().unwrap().as_mut().map(std::mem::take).unwrap_or_default()
     }
 
-    pub fn finish(&self) -> Vec<String> {
-        self.0.lock().unwrap().take().unwrap_or_default()
+    pub fn finish(&self) -> Option<Vec<String>> {
+        self.0.lock().unwrap().take()
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn has_files(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|files| !files.is_empty())
+    }
+
+    #[cfg(any(target_os = "macos", test))]
     pub fn is_pending(&self) -> bool {
         self.0.lock().unwrap().is_some()
     }
@@ -56,9 +66,9 @@ mod tests {
         startup.defer(&["before-setup.md".into()]);
         assert_eq!(startup.take_pending(), ["before-setup.md"]);
         startup.defer(&["during-setup.md".into()]);
-        assert_eq!(startup.finish(), ["during-setup.md"]);
+        assert_eq!(startup.finish(), Some(vec!["during-setup.md".into()]));
         assert!(!startup.is_pending());
         assert!(!startup.defer(&["after-ready.md".into()]));
-        assert!(startup.finish().is_empty());
+        assert!(startup.finish().is_none());
     }
 }
