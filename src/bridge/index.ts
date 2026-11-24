@@ -7,6 +7,7 @@ import { MenuItemConstructorOptions, serializeMenu, setMenuSettings, platform } 
 import { localFileUrl, filePath } from './files';
 import { Spelling, installUnderlines } from './spelling';
 import { WindowsMenu } from './windows-menu';
+import { renderPdf } from './pdf-export';
 import { messageDialog, type MessageBoxOptions } from '../renderer/dialogs';
 const callbacks=new Set<(event:any)=>void>();
 const pending:any[]=[];
@@ -66,6 +67,7 @@ async function invoke(method:string,...args:any[]):Promise<any>{
   if(method==='executeJavaScript')return (0,eval)(args[0]);
   if(method==='webContents.clearCache'){localStorage.clear();return true;}
   if(/^webContents\.(undo|redo|cut|copy|selectAll)$/.test(method)){document.execCommand(method.split('.')[1]);return true;}
+  if(method==='export.htmlToPDF'&&typeof args[0]==='string')return renderPdf(args[0],html=>raw(method,html));
   const result=await raw(method,...args);
   if(['setting.put','setting.setCurTheme','setting.clearRecentDocuments','setting.updateRecentFile','setting.addRecentFolder','setting.removeRecentFolder','setting.removeRecentDocument'].includes(method))await refreshMenu();
   return result;

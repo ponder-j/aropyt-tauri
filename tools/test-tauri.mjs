@@ -147,13 +147,37 @@ try{
   const sized=xml.match(/<w:drawing>[\s\S]*?<\/w:drawing>/g)?.find(s=>s.includes('HTML-sized'));assert(sized?.includes('cx="571500" cy="285750"'),'Sized HTML image lost 60x30 size: '+sized);
   assert((await invoke('pandoc.import',path.join(work,'converted.docx'))).content.includes('CONVERSION_TAIL'));assert((await stat(path.join(work,'converted.assets/diagram-1.png'))).size>0);pass('Real Word import/export: editable math, table, graph, HTML image sizing and persistent LaTeX assets');
   await js(`(async()=>{const api=window.__aropyt;api.getEditor().setValue('UNSAVED_MUST_SURVIVE');api.state.file=null;await api.runAction('new')})()`);assert.equal(await js('window.__aropyt.getEditor().value'),'UNSAVED_MUST_SURVIVE');await js(`window.__testSaveMode='save-cancel';window.__aropyt.runAction('new')`);assert.equal(await js('window.__aropyt.getEditor().value'),'UNSAVED_MUST_SURVIVE');await js(`window.JSBridge.invoke=window.__realInvoke`);pass('Cancel and cancelled Save As both preserve unsaved content');
-  const content='# Tauri 导出\n\n中文与 English\n\n$x^2$\n\n```java\nint n = 1;\n```\n\n```mermaid\ngraph LR\n A[Start] --> B[End]\n```\n\n![reference](reference.png)\n\nEXPORT_TAIL';
+  const content='# Tauri 导出\n\n中文与 English\n\n$x^2$\n\n```java\nint n = 1;\n```\n\n```mermaid\ngraph LR\n A[Start] --> B[End]\n```\n\n![reference](reference.png)\n\n'+
+    '[Guide](../project/docs/tactic.md) · [Line](../project/docs/tactic.md#L252) · [Web](https://example.com/docs) · [Section](#link-target)\n\n'+
+    '<a href="./资料 file.md?version=2#section">Local HTML link</a>\n\n## Link target\n\nEXPORT_TAIL';
   await js(`(()=>{const api=window.__aropyt;api.state.file=${JSON.stringify(source)};api.getEditor().setValue(${JSON.stringify(content)});})()`);
   const html=await js('window.__aropyt.prepareExport()');assert(html.includes('data:image/png;base64,')&&html.includes('EXPORT_TAIL')&&html.includes('<svg'));
-  const pdf=Buffer.from(await invoke('export.htmlToPDF',html),'base64');const image=Buffer.from(await invoke('export.htmlToImage',html),'base64');assert.equal(pdf.subarray(0,4).toString(),'%PDF');assert.equal(image.subarray(1,4).toString(),'PNG');
+  const exportPdf=async html=>Buffer.from(await js(`window.JSBridge.invoke('export.htmlToPDF',${JSON.stringify(html)})`),'base64');
+  const pdf=await exportPdf(html);const image=Buffer.from(await invoke('export.htmlToImage',html),'base64');assert.equal(pdf.subarray(0,4).toString(),'%PDF');assert.equal(image.subarray(1,4).toString(),'PNG');
+  if(['win32','darwin'].includes(process.platform)){
+    const {PDFDocument,PDFDict,PDFName,PDFString,PDFHexString}=(await import('../vendor/aropyt-lib/pdf/pdf-lib.min.js')).default;
+    const document=await PDFDocument.load(pdf,{updateMetadata:false});
+    const uriKey=PDFName.of('URI'),actionKey=PDFName.of('A'),destKey=PDFName.of('Dest');
+    const actionType=PDFName.of('S'),goTo=PDFName.of('GoTo');
+    const uriTargets=[];
+    let hasSectionLink=false;
+    for(const page of document.getPages()){
+      for(const ref of page.node.Annots()?.asArray()??[]){
+        const annotation=document.context.lookup(ref,PDFDict);
+        const action=annotation.lookupMaybe(actionKey,PDFDict);
+        const uri=document.context.lookup(action?.get(uriKey));
+        if(uri instanceof PDFString||uri instanceof PDFHexString)uriTargets.push(uri.decodeText());
+        if(annotation.has(destKey)||action?.get(actionType)===goTo)hasSectionLink=true;
+      }
+    }
+    assert.deepEqual(new Set(uriTargets),new Set(['../project/docs/tactic.md','../project/docs/tactic.md#L252',
+      './%E8%B5%84%E6%96%99%20file.md?version=2#section','https://example.com/docs']));
+    assert(hasSectionLink,'PDF export lost the internal section link');
+    pass('PDF annotations preserve relative destinations, fragments, external URLs and internal links');
+  }
   await mkdir('release/verification',{recursive:true});await writeFile('release/verification/export.pdf',pdf);await writeFile('release/verification/export.png',image);await writeFile('release/verification/export.html',html);pass('Native PDF/PNG exports use the complete static document with math, Mermaid, fonts and embedded images');
   const longHtml=html.replace('EXPORT_TAIL',Array.from({length:100},(_,i)=>'<p>Paragraph '+i+' LONG_DOCUMENT_CONTENT</p>').join('')+'<p>LONG_DOCUMENT_TAIL</p>');
-  const longPdf=Buffer.from(await invoke('export.htmlToPDF',longHtml),'base64');await writeFile('release/verification/long-export.pdf',longPdf);assert(longPdf.length>pdf.length);pass('Native multipage PDF exports retain long document content');
+  const longPdf=await exportPdf(longHtml);await writeFile('release/verification/long-export.pdf',longPdf);assert(longPdf.length>pdf.length);pass('Native multipage PDF exports retain long document content');
   const tab=await invoke('document.newTab');assert.equal(tab,true);assert((await call({op:'windows'})).filter(s=>s.startsWith('editor-')).length>=2);
   if(process.platform==='darwin')await wait(async()=>(await call({op:'native-window'})).tabCount>=2);
   pass('Multiple native document windows and explicit macOS tab creation');
