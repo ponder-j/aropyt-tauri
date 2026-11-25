@@ -1,0 +1,22 @@
+{
+  "Aropyt_1.0.1_aarch64.dmg": {
+    "name": "pdf-links-input-bb45f87--Aropyt_1.0.1_aarch64.dmg",
+    "sha256": "7c1dac7acfb5e416d0ba3254ba3fc2eb627a1199a70e3fd94eb2d522ebf05678",
+    "size": 16078150
+  },
+  "Aropyt_1.0.1_aarch64_1795531775.app.tar.gz": {
+    "name": "pdf-links-input-bb45f87--Aropyt_1.0.1_aarch64_1795531775.app.tar.gz",
+    "sha256": "c89564b35b59e7c0ac182f2e80255f30b408acf9937ff1886a73b1fdac2eda80",
+    "size": 15188427
+  },
+  "Aropyt_1.0.1_aarch64_1795531775.app.tar.gz.sig": {
+    "name": "pdf-links-input-bb45f87--Aropyt_1.0.1_aarch64_1795531775.app.tar.gz.sig",
+    "sha256": "c90c51e800c8f95ed590066050c16ce377b616fef3c3623d079e108dd3e46bd0",
+    "size": 424
+  },
+  "latest-macos.json": {
+    "name": "pdf-links-input-bb45f87--latest-macos.json",
+    "sha256": "6c8f0cab923a21ef17cc4f88d013f6b46bf952150d7f760084d77c157a5f2628",
+    "size": 839
+  }
+}

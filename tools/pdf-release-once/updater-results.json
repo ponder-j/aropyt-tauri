@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-24T14:58:49.345Z",
+  "version": "1.0.1",
+  "build": 1795531775,
+  "bundle": "/private/tmp/aropyt-pdf-links.ggM8Bl/release-source/release/macos-updater/install-test/Aropyt.app",
+  "archive": "/private/tmp/aropyt-pdf-links.ggM8Bl/release-source/release/macos-updater/artifacts/Aropyt_1.0.1_aarch64_1795531775.app.tar.gz",
+  "work": "/private/var/folders/pj/vcrsx3yx04g2qfplfl_bl49c0000gn/T/aropyt-macos-update-l2AC0z",
+  "proxyEnvironmentStripped": false,
+  "configuredProxy": false,
+  "passed": [
+    "Invalid proxy settings report a clear configuration error without starting an update",
+    "Mac checks ignore the current/older build and reject relabelled builds or versions",
+    "Real Mac updater verifies the signed archive and rejects changed bytes and invalid signatures",
+    "A corrupted HTTP download fails signature verification without touching the installed app",
+    "Real updater downloads and verifies the signed Mac archive over HTTP in isolation",
+    "Unsaved documents block native installation and another window cannot replace the pending update",
+    "Cancelling Save As in the real update UI aborts installation and leaves the unsaved draft open",
+    "The real update UI saves both documents, replaces the Mac app, restarts via LaunchServices and restores both windows"
+  ]
+}

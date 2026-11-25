@@ -1,195 +1,97 @@
-name: Release x64
+name: Refresh existing 1.0.1 release assets
 
 on:
   push:
-    tags: ['v*']
+    branches: [codex/publish-pdf-export-v1.0.1]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
-  group: release-${{ github.ref }}
+  group: aropyt-refresh-v1.0.1
   cancel-in-progress: false
 
 jobs:
-  metadata:
-    runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - id: version
-        run: node tools/release.mjs metadata
-      - run: npm ci
-      - run: node --test tools/release-test.mjs
-
-  windows:
-    needs: metadata
-    runs-on: windows-2022
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - name: Install test dependencies
-        shell: pwsh
-        run: |
-          choco install pandoc webview2-runtime --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "C:\Program Files\Pandoc" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-      - run: npm ci
-      - name: Build and test Windows installer
-        shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./tools/release-windows.ps1
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: verification-windows-x64
-          path: release/verification/
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@v7
-        with:
-          name: installer-windows-x64
-          path: release/artifacts/
-          if-no-files-found: error
-
-  linux:
-    needs: metadata
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - name: Build Linux x64 environment
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: tools/linux.Dockerfile
-          platforms: linux/amd64
-          load: true
-          tags: aropyt-release:ci
-          cache-from: type=gha,scope=linux-x64
-          cache-to: type=gha,scope=linux-x64,mode=max
-      - name: Build and test DEB and AppImage
-        env:
-          SOURCE_COMMIT: ${{ github.sha }}
-        run: |
-          docker run --name aropyt-release --init --platform linux/amd64 --shm-size=1g \
-            -e GITHUB_SHA="$SOURCE_COMMIT" \
-            -e CARGO_BUILD_JOBS=2 \
-            -e WEBKIT_DISABLE_COMPOSITING_MODE=1 \
-            -e WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 \
-            -e APPIMAGE_EXTRACT_AND_RUN=1 \
-            aropyt-release:ci sh tools/release-linux.sh
-      - name: Collect container output
-        if: always()
-        run: |
-          mkdir -p release/verification release/artifacts
-          if docker container inspect aropyt-release >/dev/null 2>&1; then
-            docker cp aropyt-release:/app/release/verification/. release/verification/
-            docker cp aropyt-release:/app/release/artifacts/. release/artifacts/ || true
-            docker rm -f aropyt-release
-          fi
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: verification-linux-x64
-          path: release/verification/
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@v7
-        with:
-          name: installer-linux-x64
-          path: release/artifacts/
-          if-no-files-found: error
-
-  assemble:
-    needs: [metadata, windows, linux]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: '*-x64'
-          path: release/download
-      - name: Validate evidence and prepare release files
-        run: node tools/release.mjs assemble
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-files
-          path: release/publish/
-          if-no-files-found: error
-
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [metadata, assemble]
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
+      actions: read
       contents: write
     env:
+      PDF_RELEASE_WORKDIR: ${{ runner.temp }}/aropyt-pdf-release
       GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-      PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
-      SOURCE_COMMIT: ${{ github.sha }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          name: release-files
-          path: release/publish
-      - name: Publish verified release
-        shell: bash
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit
+      - name: Verify source CI
+        env:
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          cd release/publish
-          sha256sum --check SHA256SUMS.txt
-          test "$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq '.sha')" = "$SOURCE_COMMIT"
-          if gh release view "$RELEASE_TAG" --json body --jq '.body' 2>/dev/null | grep -Fq '<!-- aropyt-unified-release -->'; then
-            echo "x64 artifacts verified; publication is managed by the unified four-platform release."
-            exit 0
-          fi
-          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > existing-release.txt 2>/dev/null; then
-            if [ "$(cat existing-release.txt)" != true ]; then
-              echo "Release $RELEASE_TAG is already published; refusing to replace it."
-              exit 1
-            fi
-          else
-            gh release create "$RELEASE_TAG" --verify-tag --draft \
-              --title "Aropyt ${RELEASE_TAG#v}" --notes-file release-notes.md
-          fi
-          gh release upload "$RELEASE_TAG" ./*.exe ./*.exe.sig latest.json ./*.deb ./*.AppImage ./*_verification.zip SHA256SUMS.txt --clobber
-          release_id=$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')
-          gh api "repos/$GH_REPO/releases/$release_id" \
-            --jq '.assets[] | [.name, .digest] | @tsv' > remote-assets.tsv
-          test "$(wc -l < remote-assets.tsv)" -eq 7
-          while IFS=$'\t' read -r filename digest; do
-            test -f "$filename"
-            actual=$(sha256sum "$filename" | cut -d ' ' -f 1)
-            test "$digest" = "sha256:$actual"
-          done < remote-assets.tsv
-          if [ "$PRERELEASE" = true ]; then
-            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false --notes-file release-notes.md
-          else
-            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest --notes-file release-notes.md
-          fi
+          for run in 45419402345 45417902440 45418016710 45419209233; do
+            test "$(gh api "repos/$REPO/actions/runs/$run" --jq '.conclusion')" = success
+          done
+          test "$(gh api "repos/$REPO/actions/runs/45419402345" --jq '.head_sha')" = cf34096e3c531f96baa50f7e8306aa8d3b112901
+          test "$(gh api "repos/$REPO/actions/runs/45418016710" --jq '.head_sha')" = cf34096e3c531f96baa50f7e8306aa8d3b112901
+          test "$(gh api "repos/$REPO/actions/runs/45417902440" --jq '.head_sha')" = bb45f8757885b1cc5a7ffcc44f4d35ccf57da2fa
+          test "$(gh api "repos/$REPO/actions/runs/45419209233" --jq '.head_sha')" = 45ff859ae777ffd146bdac8084877cbe57b073a9
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45418016710
+          name: release-files
+          path: ${{ env.PDF_RELEASE_WORKDIR }}/x64-ci
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45419209233
+          pattern: '*-linux-arm64'
+          path: ${{ env.PDF_RELEASE_WORKDIR }}/arm-ci
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45417902440
+          name: verification-macos-15
+          path: ${{ env.PDF_RELEASE_WORKDIR }}/mac-local/verification-macos-15
+      - name: Verify the installed Mac package and release inputs
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          root="$PDF_RELEASE_WORKDIR"
+          mkdir -p "$root/mac-local/artifacts" "$root/previous-release" "$root/verified-rollback"
+          gh api "repos/$REPO/releases/421408145" > "$root/previous-release/live.json"
+          gh release download v1.0.1 --repo "$REPO" --pattern 'pdf-links-input-bb45f87--*' --dir "$root/mac-local/artifacts"
+          gh release download v1.0.1 --repo "$REPO" --pattern 'Aropyt_1.0.1_verification.zip' --dir "$root/verified-rollback"
+          node tools/pdf-release-once/verify-input.mjs
+          cp tools/pdf-release-once/installed-check.json tools/pdf-release-once/updater-results.json "$root/mac-local/"
+          cp tools/pdf-release-once/assemble.mjs tools/pdf-release-once/publish.ps1 "$root/"
+          ln -s "$GITHUB_WORKSPACE" "$root/desktop"
+          node "$root/assemble.mjs"
+      - name: Replace the existing Release attachments
+        shell: pwsh
+        run: '& "$env:PDF_RELEASE_WORKDIR/publish.ps1"'
+      - name: Verify the published release and clean staging inputs
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          root="$PDF_RELEASE_WORKDIR"
+          gh api "repos/$REPO/releases/421408145" > "$root/online-with-staging.json"
+          jq '.assets |= map(select(.name|startswith("pdf-links-input-bb45f87--")|not))' "$root/online-with-staging.json" > "$root/published.json"
+          node tools/pdf-release-once/verify-published.mjs
+          jq -r '.assets[] | select(.name|startswith("pdf-links-input-bb45f87--")) | .id' "$root/online-with-staging.json" |
+            while read -r id; do gh api "repos/$REPO/releases/assets/$id" --method DELETE; done
+          gh api "repos/$REPO/releases/421408145" > "$root/published.json"
+          node tools/pdf-release-once/verify-published.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: publication-verification
+          path: |
+            ${{ env.PDF_RELEASE_WORKDIR }}/published.json
+            ${{ env.PDF_RELEASE_WORKDIR }}/publish/SHA256SUMS.txt
+          if-no-files-found: warn

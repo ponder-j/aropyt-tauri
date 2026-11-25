@@ -1,0 +1,13 @@
+{
+  "commit": "bb45f8757885b1cc5a7ffcc44f4d35ccf57da2fa",
+  "artifact": "Aropyt_1.0.1_aarch64.dmg",
+  "sha256": "7c1dac7acfb5e416d0ba3254ba3fc2eb627a1199a70e3fd94eb2d522ebf05678",
+  "binary": "/Applications/Aropyt.app/Contents/MacOS/aropyt",
+  "binarySha256": "3ba022b92c18ac35df7ee0a4c4867593ad14c94d32e8c18b800b69747abb31b3",
+  "exitCode": 0,
+  "checks": [
+    "DMG and installed bundle executable match",
+    "Ad-hoc code signature verifies",
+    "Installed app preserves PDF annotations, renders PDF and PNG, and exports multiple pages"
+  ]
+}
