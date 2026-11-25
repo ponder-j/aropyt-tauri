@@ -17,9 +17,11 @@ jobs:
       actions: read
       contents: write
     env:
-      PDF_RELEASE_WORKDIR: ${{ runner.temp }}/aropyt-pdf-release
+
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Set the publication workspace
+        run: echo "PDF_RELEASE_WORKDIR=$RUNNER_TEMP/aropyt-pdf-release" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
