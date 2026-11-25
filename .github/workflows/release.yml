@@ -67,7 +67,7 @@ jobs:
           mkdir -p "$root/mac-local/artifacts" "$root/previous-release" "$root/verified-rollback"
           gh api "repos/$REPO/releases/421408145" > "$root/previous-release/live.json"
           gh release download v1.0.1 --repo "$REPO" --pattern 'pdf-links-input-bb45f87--*' --dir "$root/mac-local/artifacts"
-          gh release download v1.0.1 --repo "$REPO" --pattern 'Aropyt_1.0.1_verification.zip' --dir "$root/verified-rollback"
+          gh release download v1.0.1 --repo "$REPO" --pattern 'Aropyt_1.0.1_verification.zip' --pattern 'latest-macos.json' --dir "$root/verified-rollback"
           node tools/pdf-release-once/verify-input.mjs
           cp tools/pdf-release-once/installed-check.json tools/pdf-release-once/updater-results.json "$root/mac-local/"
           cp tools/pdf-release-once/assemble.mjs tools/pdf-release-once/publish.ps1 "$root/"
